@@ -1,0 +1,14 @@
+# Test/development environment for integration work (Python 3.10, CPU)
+# B-Free backbone uses timm ViT-B/14 reg4 dinov2; pins follow B-Free/code/requirements.txt
+# (note: "pytorch" in B-Free requirements is actually the PyPI package "torch")
+torch==2.0.1
+torchvision==0.15.2
+timm>=1.0.12
+transformers>=4.43.4
+pyyaml
+scikit-learn
+pandas
+tqdm
+pillow
+numpy
+pytest

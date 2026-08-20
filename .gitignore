@@ -172,3 +172,18 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# --- integration/loss-backbone additions ---
+.venv/
+tests/
+results/
+outputs/
+*.pth
+*.pt
+*.ckpt
+weights/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+configs/*.txt
+
