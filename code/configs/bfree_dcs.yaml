@@ -1,0 +1,35 @@
+# Cấu hình B-Free + GlobalForge (LIB + GSR + L_DCS) cho nhánh integration/loss-backbone.
+# Hyperparameter chưa có số liệu tham chiếu (lambda_dcs, tau...) đều ở đây — không hardcode.
+
+backbone:
+  arch: vit_base_patch14_reg4_dinov2.lvd142m
+  num_classes: 2
+  img_size: 504
+  pretrained: false          # true nếu tải dinov2 pretrained; overfit test dùng false
+  use_lib: true
+  use_gsr: true
+  lib_kernel: 3              # LocalInformationBottleneck kernel_size
+  lib_tau: 0.5               # LocalInformationBottleneck tau (không dùng trong stub)
+  gsr_window: 3              # GlobalStructuralReasoning window (Chebyshev)
+  gsr_mask_prob: 1.0         # xác suất áp mask khi training
+
+loss:
+  use_dcs: true
+  lambda_dcs: 0.1            # hệ số L_DCS trong total = CE + lambda_dcs * L_DCS (khởi điểm)
+  dcs_tau: 0.07              # nhiệt độ InfoNCE (GlobalForge released: 0.07)
+  label_smoothing: 0.1       # CE label smoothing (GlobalForge convention)
+
+# Nguồn view suy giảm cho L_DCS (pipeline GlobalForge datasets_real.py:378-383):
+#   RandomJPEG(quality=(20,80), p=1.0)
+#     + RandomGaussianBlur(kernel_size=7, sigma=(0.5,1.5), p=0.8)
+#     + ColorDistortion(level=3, p=0.8)
+# (KHÔNG dùng inpainted++ của B-Free — repo B-Free không có code, chỉ mô tả chữ.)
+degradation:
+  jpeg_quality_min: 20
+  jpeg_quality_max: 80
+  blur_kernel: 7
+  blur_sigma_min: 0.5
+  blur_sigma_max: 1.5
+  blur_prob: 0.8
+  color_level: 3
+  color_prob: 0.8
