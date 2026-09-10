@@ -173,6 +173,10 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
+# --- Project-specific additions ---
+plans/
+guide/
+
 # --- integration/loss-backbone additions ---
 .venv/
 tests/
