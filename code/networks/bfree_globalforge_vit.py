@@ -23,8 +23,8 @@ import torch.nn.functional as F
 import timm
 from timm.models.vision_transformer import VisionTransformer
 
-from modules.lib_adapter_stub import LIBAdapter
-from modules.gsr_adapter_stub import GSRAdapter
+from modules.lib_adapter import LIBAdapter
+from modules.gsr_adapter import GSRAdapter
 from modules.dcs_loss import DCSLoss, info_nce_loss
 
 
