@@ -122,18 +122,52 @@ print("OK: repo cloned on integration/loss-backbone, no stub files (K0 verified)
 # =====================================================================
 
 NB01_CELLS = [
-    ("md", """# B-Free x GlobalForge — Notebook 01: Setup Bundle (K1)
+    ("md", """# B-Free x GlobalForge — Notebook 01: Setup Bundle Builder (K1)
 
-Cài đặt môi trường **offline** cho Kaggle (RTX PRO 6000 Blackwell 96GB, sm_120, cu128, Python 3.11), clone repo tích hợp và validate.
+Chạy trên session **CPU hoặc T4×2, Internet ON**. Notebook này **tạo** các assets offline cho notebooks 02/03 (những notebook chạy trên RTX PRO 6000 Blackwell 96GB, hoàn toàn offline — không pip internet, không HF hub):
 
-**Yêu cầu Kaggle input:** dataset `bfree-wheels` — wheel bundle chứa `torch==2.8.0+cu128`, `torchvision==0.23.0+cu128`, `timm==1.0.22`, `peft==0.15.2`, `transformers==4.55.4`, `pandas==2.3.3`, `numpy==1.26.4`, `matplotlib==3.11.1`, `seaborn==0.13.2`, `scikit-learn`, `scipy`, `Pillow`, `pyyaml`, `tqdm`, `safetensors` (+ dependencies: `huggingface_hub`, `tokenizers`, ...). Tạo bundle trên máy có internet: `pip download -d bfree-wheels/ <các package như trên>` rồi upload làm Kaggle Dataset.
+1. `/kaggle/working/bfree-wheels/` — wheel bundle cho **Linux x86_64, Python 3.11** (Kaggle dùng chung image Linux x86_64 Python 3.11 cho mọi accelerator, nên wheels tải ở session CPU/T4 khớp session RTX PRO 6000):
+   `torch==2.8.0+cu128`, `torchvision==0.23.0+cu128` (Blackwell sm_120 cần >=2.8 — risk table), `timm==1.0.22`, `peft==0.15.2`, `transformers==4.55.4`, `pandas==2.3.3` (MUST <3), `numpy==1.26.4`, `matplotlib==3.11.1`, `seaborn==0.13.2`, `scikit-learn`, `scipy`, `pyyaml`, `pillow`, `tqdm`, `safetensors`, `huggingface_hub` (+ dependencies).
+2. `/kaggle/working/dinov2-vitb14-reg4-pretrain/` — weights DINOv2 ViT-B/14 reg4 (`timm/vit_base_patch14_reg4_dinov2.lvd142m`, `model.safetensors`) cho offline pretrained init (D5) của notebook 02.
 
-**Pin stack (locked, plan.md):** torch 2.8.0+cu128 (sm_120 cần >=2.8) / pandas 2.3.3 (MUST <3, breaks sklearn nếu >=3) / numpy 1.26.4.
+Notebook 02/03 sẽ `pip install --no-index` từ bundle này (rule agent.md: offline, không apt-get, không HF hub).
 
-> Hoàn toàn offline: KHÔNG apt-get, KHÔNG internet.pip, KHÔNG HF hub download trong runtime."""),
+Sau khi chạy xong: **Save Version → Save & Run All (Commit)**, rồi từ tab **Output** tạo 2 Kaggle Datasets (`bfree-wheels`, `dinov2-vitb14-reg4-pretrain`) và attach vào notebooks 02/03."""),
 
-    PIP_INSTALL_CELLS[0],
+    ("code", """import platform
+import sys
 
+print(f"Python  : {sys.version.split()[0]} (bundle target: Kaggle Linux x86_64, Python 3.11)")
+print(f"Platform: {platform.platform()}")
+try:
+    import torch
+    print(f"torch (session, preinstalled): {torch.__version__}")
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    if torch.cuda.is_available():
+        print(f"GPU: {torch.cuda.get_device_name(0)} — not required here (CPU session is fine)")
+except ImportError:
+    print("torch not preinstalled in this session — fine, this notebook only downloads wheels.")"""),
+
+    ("code", """WHEELS_DIR = "/kaggle/working/bfree-wheels"
+
+!pip download --quiet --dest {WHEELS_DIR} \\
+    --index-url https://download.pytorch.org/whl/cu128 \\
+    --extra-index-url https://pypi.org/simple \\
+    torch==2.8.0+cu128 torchvision==0.23.0+cu128
+
+!pip download --quiet --dest {WHEELS_DIR} \\
+    timm==1.0.22 peft==0.15.2 transformers==4.55.4 \\
+    pandas==2.3.3 numpy==1.26.4 matplotlib==3.11.1 seaborn==0.13.2 \\
+    scikit-learn scipy pyyaml pillow tqdm safetensors huggingface_hub
+
+import glob
+import os
+
+wheels = sorted(glob.glob(os.path.join(WHEELS_DIR, "*.whl")))
+assert wheels, "pip download produced no wheels."
+print(f"{len(wheels)} wheels, {sum(os.path.getsize(w) for w in wheels) / 1024**3:.2f} GB -> {WHEELS_DIR}")"""),
+
+    ("code", """!pip install --quiet timm==1.0.22 peft==0.15.2 transformers==4.55.4 pyyaml safetensors huggingface_hub"""),
     CLONE_CELL,
 
     ("code", """import sys
@@ -141,25 +175,15 @@ Cài đặt môi trường **offline** cho Kaggle (RTX PRO 6000 Blackwell 96GB, 
 sys.path.insert(0, os.path.join(REPO_DIR, "code"))
 
 import torch
-import torchvision
 import timm
 import peft
 import transformers
-import pandas
-import numpy
-import sklearn
 import yaml
-import PIL
 
-print(f"torch        = {torch.__version__}")
-print(f"torchvision  = {torchvision.__version__}")
-print(f"timm         = {timm.__version__}")
-print(f"peft         = {peft.__version__}")
-print(f"transformers = {transformers.__version__}")
-print(f"pandas       = {pandas.__version__}")
-print(f"numpy        = {numpy.__version__}")
-
-assert pandas.__version__.split('.')[0] == '2', "pandas>=3 breaks sklearn — must pin pandas<3 (risk table)."
+print(f"torch (session) = {torch.__version__}")
+print(f"timm            = {timm.__version__}")
+print(f"peft            = {peft.__version__}")
+print(f"transformers    = {transformers.__version__}")
 
 from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
 from configs.loader import load_config, build_model_kwargs
@@ -175,36 +199,80 @@ for k, v in kwargs.items():
     print(f"  {k} = {v}")
 print("\\nIMPORT VALIDATION OK")"""),
 
+    ("code", """import os
+import shutil
+
+from huggingface_hub import hf_hub_download
+
+PRETRAIN_DIR = "/kaggle/working/dinov2-vitb14-reg4-pretrain"
+os.makedirs(PRETRAIN_DIR, exist_ok=True)
+
+src = hf_hub_download(repo_id="timm/vit_base_patch14_reg4_dinov2.lvd142m",
+                      filename="model.safetensors")
+dst = os.path.join(PRETRAIN_DIR, "model.safetensors")
+shutil.copyfile(src, dst)
+print(f"saved: {dst} ({os.path.getsize(dst) / 1024**2:.1f} MB)")
+
+from safetensors.torch import load_file
+
+sd = load_file(dst)
+embed_dim = sd["patch_embed.proj.weight"].shape[0]
+pe = sd["pos_embed"]
+print(f"state dict: {len(sd)} tensors | embed_dim={embed_dim} | pos_embed={tuple(pe.shape)}")
+assert embed_dim == 768, "not a ViT-B checkpoint"
+assert tuple(pe.shape) == (1, 37 * 37 + 5, 768), (
+    f"unexpected pos_embed shape {tuple(pe.shape)} — expected 518px grid (37x37) + 5 prefix tokens")
+print("DINOv2 ViT-B/14 reg4 weights OK (518px grid 37x37 + 5 prefix tokens)")"""),
+
     ("code", """import torch
-
-print(f"CUDA available : {torch.cuda.is_available()}")
-assert torch.cuda.is_available(), "No CUDA device — this notebook requires the Kaggle GPU."
-
-props = torch.cuda.get_device_properties(0)
-total_mem = getattr(props, "total_mem", None) or getattr(props, "total_memory")
-print(f"GPU            : {torch.cuda.get_device_name(0)}")
-print(f"VRAM           : {total_mem / 1024**3:.1f} GB")
-print(f"Compute caps   : sm_{props.major}{props.minor} (Blackwell = sm_120, needs torch>=2.8 cu128)")
-print(f"torch CUDA     : {torch.version.cuda}")
-print(f"bf16 supported : {torch.cuda.is_bf16_supported()} (must be True — fp16 forbidden on Blackwell)")
 
 model_smoke = BFreeGlobalForgeViT(img_size=224, pretrained=False)
 x = torch.randn(2, 3, 224, 224)
 with torch.no_grad():
     out = model_smoke(x)
-print(f"\\nCPU smoke test: logits {tuple(out['logits'].shape)}, cls {tuple(out['cls'].shape)}")
+print(f"CPU smoke test: logits {tuple(out['logits'].shape)}, cls {tuple(out['cls'].shape)}")
 assert out["logits"].shape == (2, 2) and out["cls"].shape == (2, 768)
 del model_smoke, x, out
-print("GPU + MODEL SMOKE OK")"""),
+print("MODEL SMOKE OK")"""),
 
-    ("md", """## Environment Ready (K1 pass)
+    ("code", """import glob
+import os
 
-- Deps installed offline từ wheel bundle (pin stack đúng, pandas<3).
-- Repo `P-Bao/B-Free` branch `integration/loss-backbone` cloned, không còn stub files (K0).
-- `BFreeGlobalForgeViT` + LIB/GSR/DCS import thành công; forward smoke pass.
-- GPU Blackwell sm_120 + bf16 khả dụng, torch 2.8.0+cu128.
+PIN_STACK = {
+    "torch": "2.8.0+cu128",
+    "torchvision": "0.23.0+cu128",
+    "timm": "1.0.22",
+    "peft": "0.15.2",
+    "transformers": "4.55.4",
+    "pandas": "2.3.3",
+    "numpy": "1.26.4",
+    "matplotlib": "3.11.1",
+    "seaborn": "0.13.2",
+}
 
-**Tiếp theo:** chạy `02_bfree_kaggle_train.ipynb` (train LoRA r=16, 8 epochs @504px)."""),
+wheels = sorted(glob.glob(os.path.join(WHEELS_DIR, "*.whl")))
+names = {os.path.basename(w).split("-")[0].replace("_", "-").lower() for w in wheels}
+missing = [f"{pkg}=={ver}" for pkg, ver in PIN_STACK.items() if pkg not in names]
+assert not missing, f"Missing pinned wheels in bundle: {missing}"
+assert os.path.isfile(os.path.join(PRETRAIN_DIR, "model.safetensors")), "model.safetensors missing"
+
+total_gb = sum(os.path.getsize(w) for w in wheels) / 1024**3
+print(f"bundle check OK: {len(wheels)} wheels ({total_gb:.2f} GB) + DINOv2 ViT-B/14 reg4 weights")
+for w in wheels[:40]:
+    print(f"  {os.path.basename(w)}")"""),
+
+    ("md", """## Bundle Ready (K1 pass)
+
+Output trong `/kaggle/working/`:
+- `bfree-wheels/` — wheel bundle pin stack đầy đủ (Linux x86_64, Python 3.11) cho `pip install --no-index`
+- `dinov2-vitb14-reg4-pretrain/model.safetensors` — DINOv2 ViT-B/14 reg4 pretrained (D5); notebook 02 sẽ resample `pos_embed` 518px→504px khi load
+
+**Bước tiếp theo (bắt buộc):**
+1. **Save Version → Save & Run All (Commit)** để chốt output.
+2. Tab **Output** của notebook này → **New Dataset** cho từng thư mục:
+   - `bfree-wheels/` → dataset `bfree-wheels`
+   - `dinov2-vitb14-reg4-pretrain/` → dataset `dinov2-vitb14-reg4-pretrain`
+3. Attach 2 dataset đó vào `02_bfree_kaggle_train.ipynb` và `03_bfree_kaggle_eval.ipynb` (chạy offline trên RTX PRO 6000)."""),
 ]
 
 # =====================================================================
@@ -226,11 +294,11 @@ Huấn luyện **DINOv2 ViT-B/14 reg4 + LIB + GSR + L_DCS** (LoRA r=16, α=32) t
 - Val split `md5(id)%100 < 3`; mỗi val ID = 1 real + 1 deterministic fake (balanced)
 
 **Yêu cầu Kaggle inputs:**
-- `bfree-wheels` — wheel bundle (như notebook 01)
+- `bfree-wheels` — wheel bundle **do notebook 01 tạo** (CPU/T4 online session, Save Version → New Dataset)
 - `bfree-training-data` — B-Free training dataset (tải từ grip.unina.it): `COCO_real_512/` + 6 thư mục `SD2.1_*/`, fake variant dùng **cùng tên file** với ảnh real tương ứng
-- `dinov2-vitb14-reg4-pretrain` — weights `timm/vit_base_patch14_reg4_dinov2.lvd142m` (file `.safetensors` hoặc `.pth`) để init backbone offline
+- `dinov2-vitb14-reg4-pretrain` — weights `timm/vit_base_patch14_reg4_dinov2.lvd142m` (`model.safetensors`, ~330MB) **do notebook 01 tạo**, cho offline pretrained init (D5)
 
-> Log riêng CE và DCS mỗi epoch (rule agent.md) → `train_log.csv` cho K4 / Phase 8."""),
+> Notebook này chạy **offline hoàn toàn** trên RTX PRO 6000: KHÔNG apt-get, KHÔNG internet.pip (chỉ `--no-index` từ bundle), KHÔNG HF hub download trong runtime. Log riêng CE và DCS mỗi epoch (rule agent.md) → `train_log.csv` cho K4 / Phase 8."""),
 
     PIP_INSTALL_CELLS[0],
 
@@ -701,13 +769,15 @@ Score = `logit_fake − logit_real` (models 1, 2); model 3 quy về logit bằng
 **Grouped average** (SynthWildx / WildRF / AIGIBench / CO-SPY / BFree): `combine_parent_dataset_average` — trung bình của trung bình các parent group (giống `eval_in_the_wild.py`).
 
 **Yêu cầu Kaggle inputs:**
-- `bfree-wheels` (wheel bundle) — repo clone từ GitHub
+- `bfree-wheels` — wheel bundle **do notebook 01 tạo** (CPU/T4 online session, Save Version → New Dataset)
 - `k2-output` — output notebook 02 (`bfree_globalforge_lora_r16.pth` hoặc `..._best.pth`)
-- `bfree-baseline-weights` — thư mục `BFREE_dino2reg4/` (config.yaml + weights .pth) từ https://grip-unina.github.io/B-Free/ (weights table)
-- `globalforge-code` — thư mục `code/` của GlobalForge (chứa `models/REM.py`)
-- `globalforge-backbone-vitla` — HF backbone ViT-L của GlobalForge: hoặc chính là thư mục model (`config.json` ở root) hoặc chứa thư mục con `vit_l_a/`
-- `globalforge-weights` — checkpoint 13 parts `checkpoint-best.pth.part_*` (~1.25GB total)
-- `wild-benchmarks` — DATA_ROOT 17 subsets, layout như `eval_in_the_wild.py` (Chameleon, synthwildx/{dalle3,firefly,midjourney_v5}, WildRF/test/{facebook,reddit,twitter}, AIGIBench/{SocialRF,CommunityAI}, CO-SPY-In-the-Wild/{civitai,dalle3,instavibeai,lexica,midjourney}, RRDataset, B-Free, realchain_CD — mỗi cái có `0_real/` + `1_fake/`); standard benchmarks nằm cùng root (`AIGCDetect/`, `GenImage/`, ... cũng `0_real/1_fake`)"""),
+- `bfree-baseline-weights` — thư mục `BFREE_dino2reg4/` (config.yaml + weights .pth) từ https://grip-unina.github.io/B-Free/ (weights table), upload làm Dataset
+- `globalforge-code` — thư mục `code/` của GlobalForge (chứa `models/REM.py`), upload làm Dataset
+- `globalforge-backbone-vitla` — HF backbone ViT-L của GlobalForge: hoặc chính là thư mục model (`config.json` ở root) hoặc chứa thư mục con `vit_l_a/`, upload làm Dataset
+- `globalforge-weights` — checkpoint 13 parts `checkpoint-best.pth.part_*` (~1.25GB total), upload làm Dataset
+- `wild-benchmarks` — DATA_ROOT 17 subsets, layout như `eval_in_the_wild.py` (Chameleon, synthwildx/{dalle3,firefly,midjourney_v5}, WildRF/test/{facebook,reddit,twitter}, AIGIBench/{SocialRF,CommunityAI}, CO-SPY-In-the-Wild/{civitai,dalle3,instavibeai,lexica,midjourney}, RRDataset, B-Free, realchain_CD — mỗi cái có `0_real/` + `1_fake/`); standard benchmarks nằm cùng root (`AIGCDetect/`, `GenImage/`, ... cũng `0_real/1_fake`)
+
+> Notebook này chạy **offline hoàn toàn** trên RTX PRO 6000: KHÔNG apt-get, KHÔNG internet.pip (chỉ `--no-index` từ bundle), KHÔNG HF hub download trong runtime."""),
 
     PIP_INSTALL_CELLS[0],
 
