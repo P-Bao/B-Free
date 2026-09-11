@@ -222,7 +222,7 @@ NB01_CELLS = [
 
 ```
 [01] setup-online (CPU/T4, online)
-      |- wheels_rtxpro6000/   : pin stack wheels (linux x86_64, py3.11)
+      |- wheels_rtxpro6000/   : pin stack wheels (linux x86_64, py3.12)
       |- models/vit_base_patch14_reg4_dinov2/  : DINOv2 ViT-B/14 reg4 (D5)
       |- bfree_src/            : repo P-Bao/B-Free @ integration/loss-backbone
       |- manifest.json        : versions + SHA256 + sizes
@@ -263,7 +263,7 @@ print(f"REPO                 = {REPO_URL} @ {BRANCH}")"""),
 
     ("md", """## 1. Chốt version môi trường
 
-Probe môi trường **Target A** (session này). Wheels tải ở đây phải khớp **Target B** — Kaggle dùng chung image Linux x86_64 + Python 3.11 cho mọi accelerator, nên assert Python 3.11 để chắc chắn."""),
+Probe môi trường **Target A** (session này). Wheels tải ở đây phải khớp **Target B** — Kaggle dùng chung image Linux x86_64 + Python 3.12 cho mọi accelerator, nên assert Python 3.12 để chắc chắn."""),
 
     ("code", """import platform
 import subprocess
@@ -275,9 +275,9 @@ print("=" * 60)
 print(f"python   = {platform.python_version()}")
 print(f"platform = {platform.platform()}")
 
-assert sys.version_info[:2] == (3, 11), (
-    f"This session runs Python {sys.version_info[:2]} but Kaggle Target B uses 3.11 — "
-    "wheels would not match. Switch the session to Python 3.11 and re-run.")
+assert sys.version_info[:2] == (3, 12), (
+    f"This session runs Python {sys.version_info[:2]} but Kaggle Target B uses 3.12 — "
+    "wheels would not match. Switch the session to Python 3.12 and re-run.")
 
 try:
     out = subprocess.run(["nvidia-smi"], capture_output=True, text=True, check=True)
@@ -470,7 +470,7 @@ for name, info in manifest["components"].items():
     ("md", """## Bundle Ready (K1 pass)
 
 `/kaggle/working/` giờ chứa **đầy đủ assets offline**:
-- `wheels_rtxpro6000/` — pin stack + leaf deps (linux x86_64, py3.11)
+- `wheels_rtxpro6000/` — pin stack + leaf deps (linux x86_64, py3.12)
 - `models/vit_base_patch14_reg4_dinov2/model.safetensors` — DINOv2 ViT-B/14 reg4 (D5)
 - `bfree_src/` — repo `integration/loss-backbone` (đã smoke test)
 - `manifest.json` — versions + SHA256
