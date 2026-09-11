@@ -1,5 +1,10 @@
 """Regenerate the three Kaggle notebooks (01/02/03) as .ipynb JSON.
 
+Pipeline (mirrors StructLoRA notebook pattern):
+  01 setup-online (Kaggle CPU/T4x2, Internet ON)  -> builds the offline bundle
+  02 training    (RTX PRO 6000, offline)           -> consumes bundle + B-Free data
+  03 eval        (RTX PRO 6000, offline)           -> consumes bundle + K2 output + benchmarks
+
 Usage: python notebooks/_build_notebooks.py
 After writing, validates each notebook with json.tool + AST compile
 (rule from agent.md: never skip notebook validation).
@@ -77,113 +82,122 @@ def write_nb(name, cells):
     return path
 
 
-OFFLINE_ENV = """import os
-os.environ["HF_HUB_OFFLINE"] = "1"
-os.environ["TRANSFORMERS_OFFLINE"] = "1\""""
-
-PIP_INSTALL_CELLS = [
-    ("code", f"""{OFFLINE_ENV}
-import os, sys, glob
-
-WHEELS_DIR = "/kaggle/input/bfree-wheels"
-assert os.path.isdir(WHEELS_DIR), (
-    f"Wheel bundle not found at {{WHEELS_DIR}}. "
-    "Attach the 'bfree-wheels' Kaggle dataset before running this notebook."
-)
-wheels = sorted(glob.glob(os.path.join(WHEELS_DIR, "*.whl")))
-print(f"Found {{len(wheels)}} wheels in {{WHEELS_DIR}}")
-assert wheels, "No .whl files found in the wheel bundle."
-
-!pip install --no-index --find-links={{WHEELS_DIR}} \\
-    torch==2.8.0+cu128 torchvision==0.23.0+cu128
-!pip install --no-index --find-links={{WHEELS_DIR}} \\
-    timm==1.0.22 peft==0.15.2 transformers==4.55.4 \\
-    pandas==2.3.3 numpy==1.26.4 matplotlib==3.11.1 seaborn==0.13.2 \\
-    scikit-learn scipy pyyaml pillow tqdm safetensors"""),
-]
-
-CLONE_CELL = ("code", """REPO_URL = "https://github.com/P-Bao/B-Free.git"
-REPO_DIR = "/kaggle/working/B-Free"
-BRANCH = "integration/loss-backbone"
-
-import os, sys, glob
-if not os.path.isdir(REPO_DIR):
-    !git clone --branch {BRANCH} {REPO_URL} {REPO_DIR}
-else:
-    print(f"{REPO_DIR} already cloned.")
-
-assert os.path.isfile(os.path.join(REPO_DIR, "code", "networks", "bfree_globalforge_vit.py")), "Clone failed: backbone file missing."
-stubs = glob.glob(os.path.join(REPO_DIR, "code", "modules", "*_stub.py"))
-assert not stubs, f"Stub files still present (K0 not merged?): {stubs}"
-print("OK: repo cloned on integration/loss-backbone, no stub files (K0 verified).")""")
-
 # =====================================================================
-# Notebook 01 — B-Free Setup Bundle (K1)
+# Shared cell sources (offline notebooks 02/03)
 # =====================================================================
 
-NB01_CELLS = [
-    ("md", """# B-Free x GlobalForge — Notebook 01: Setup Bundle Builder (K1)
-
-Chạy trên session **CPU hoặc T4×2, Internet ON**. Notebook này **tạo** các assets offline cho notebooks 02/03 (những notebook chạy trên RTX PRO 6000 Blackwell 96GB, hoàn toàn offline — không pip internet, không HF hub):
-
-1. `/kaggle/working/bfree-wheels/` — wheel bundle cho **Linux x86_64, Python 3.11** (Kaggle dùng chung image Linux x86_64 Python 3.11 cho mọi accelerator, nên wheels tải ở session CPU/T4 khớp session RTX PRO 6000):
-   `torch==2.8.0+cu128`, `torchvision==0.23.0+cu128` (Blackwell sm_120 cần >=2.8 — risk table), `timm==1.0.22`, `peft==0.15.2`, `transformers==4.55.4`, `pandas==2.3.3` (MUST <3), `numpy==1.26.4`, `matplotlib==3.11.1`, `seaborn==0.13.2`, `scikit-learn`, `scipy`, `pyyaml`, `pillow`, `tqdm`, `safetensors`, `huggingface_hub` (+ dependencies).
-2. `/kaggle/working/dinov2-vitb14-reg4-pretrain/` — weights DINOv2 ViT-B/14 reg4 (`timm/vit_base_patch14_reg4_dinov2.lvd142m`, `model.safetensors`) cho offline pretrained init (D5) của notebook 02.
-
-Notebook 02/03 sẽ `pip install --no-index` từ bundle này (rule agent.md: offline, không apt-get, không HF hub).
-
-Sau khi chạy xong: **Save Version → Save & Run All (Commit)**, rồi từ tab **Output** tạo 2 Kaggle Datasets (`bfree-wheels`, `dinov2-vitb14-reg4-pretrain`) và attach vào notebooks 02/03."""),
-
-    ("code", """import platform
-import sys
-
-print(f"Python  : {sys.version.split()[0]} (bundle target: Kaggle Linux x86_64, Python 3.11)")
-print(f"Platform: {platform.platform()}")
-try:
-    import torch
-    print(f"torch (session, preinstalled): {torch.__version__}")
-    print(f"CUDA available: {torch.cuda.is_available()}")
-    if torch.cuda.is_available():
-        print(f"GPU: {torch.cuda.get_device_name(0)} — not required here (CPU session is fine)")
-except ImportError:
-    print("torch not preinstalled in this session — fine, this notebook only downloads wheels.")"""),
-
-    ("code", """WHEELS_DIR = "/kaggle/working/bfree-wheels"
-
-!pip download --quiet --dest {WHEELS_DIR} \\
-    --index-url https://download.pytorch.org/whl/cu128 \\
-    --extra-index-url https://pypi.org/simple \\
-    torch==2.8.0+cu128 torchvision==0.23.0+cu128
-
-!pip download --quiet --dest {WHEELS_DIR} \\
-    timm==1.0.22 peft==0.15.2 transformers==4.55.4 \\
-    pandas==2.3.3 numpy==1.26.4 matplotlib==3.11.1 seaborn==0.13.2 \\
-    scikit-learn scipy pyyaml pillow tqdm safetensors huggingface_hub
-
-import glob
+OFFLINE_LOGGER_SRC = """import logging
 import os
+import sys
+from pathlib import Path
 
-wheels = sorted(glob.glob(os.path.join(WHEELS_DIR, "*.whl")))
-assert wheels, "pip download produced no wheels."
-print(f"{len(wheels)} wheels, {sum(os.path.getsize(w) for w in wheels) / 1024**3:.2f} GB -> {WHEELS_DIR}")"""),
+logger = logging.getLogger("bfree")
+logger.setLevel(logging.INFO)
+logger.handlers.clear()
+_console = logging.StreamHandler()
+_console.setFormatter(logging.Formatter(fmt="%(asctime)s | %(levelname)-7s | %(message)s", datefmt="%H:%M:%S"))
+logger.addHandler(_console)
 
-    ("code", """!pip install --quiet timm==1.0.22 peft==0.15.2 transformers==4.55.4 pyyaml safetensors huggingface_hub"""),
-    CLONE_CELL,
+logger.info("stdlib + logging ready")"""
 
-    ("code", """import sys
+BUNDLE_DISCOVERY_SRC = """import glob
+from pathlib import Path
 
-sys.path.insert(0, os.path.join(REPO_DIR, "code"))
+WORK = Path("/kaggle/working")
+
+
+def find_one(patterns, what, optional=False):
+    \"\"\"Return the first existing match across glob patterns (in priority order).\"""
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+    if optional:
+        return None
+    raise FileNotFoundError(
+        f"NOT FOUND: {what}\\nsearched: {list(patterns)}\\n"
+        "Attach the missing Kaggle dataset / notebook-output input and re-run.")
+
+
+def find_dir_containing(marker_rel, patterns, what, optional=False):
+    \"\"\"Return the parent dir that contains marker_rel, searched via glob patterns.\"""
+    for pat in patterns:
+        for hit in sorted(glob.glob(pat)):
+            root = Path(hit)
+            while root != Path("/kaggle/input") and root != root.parent:
+                if (root / marker_rel).is_file():
+                    return root
+                root = root.parent
+    if optional:
+        return None
+    raise FileNotFoundError(
+        f"NOT FOUND: {what} (marker: {marker_rel})\\nsearched: {list(patterns)}\\n"
+        "Attach the missing Kaggle dataset / notebook-output input and re-run.")
+
+
+# ---- bundle produced by notebook 01 (attach its output as input here) ----
+WHEELS_DIR = find_one(
+    ["/kaggle/input/*/wheels_rtxpro6000",
+     "/kaggle/input/wheels_rtxpro6000",
+     "/kaggle/input/*/wheels*",
+     "/kaggle/input/wheels*"],
+    "wheel bundle 'wheels_rtxpro6000' (output of notebook 01)")
+
+REPO_MARKER = "code/networks/bfree_globalforge_vit.py"
+REPO_SRC = find_dir_containing(
+    REPO_MARKER,
+    ["/kaggle/input/*/bfree_src/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/bfree_src*/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/*/B-Free/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/B-Free*/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/*/code/networks/bfree_globalforge_vit.py"],
+    "B-Free repo source 'bfree_src' (output of notebook 01)")
+
+DINOV2_SD = find_one(
+    ["/kaggle/input/*/models/vit_base_patch14_reg4_dinov2/model.safetensors",
+     "/kaggle/input/models/vit_base_patch14_reg4_dinov2/model.safetensors",
+     "/kaggle/input/dinov2*/*.safetensors",
+     "/kaggle/input/*/dinov2*/*.safetensors"],
+    "DINOv2 ViT-B/14 reg4 weights (output of notebook 01)")
+
+wheels = sorted(glob.glob(str(Path(WHEELS_DIR) / "*.whl")))
+assert wheels, f"No .whl files inside {WHEELS_DIR}"
+logger.info(f"WHEELS_DIR  = {WHEELS_DIR} ({len(wheels)} wheels)")
+logger.info(f"REPO_SRC    = {REPO_SRC}")
+logger.info(f"DINOV2_SD   = {DINOV2_SD}")"""
+
+OFFLINE_ENV_SRC = """os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ["PYTHONHASHSEED"] = "0"
+os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
+
+logger.info("offline env vars set (HF hub blocked, bytecode off — repo source stays read-only in input)")"""
+
+PIP_INSTALL_SRC = """!pip install --no-index --find-links="{WHEELS_DIR}" \\
+    torch torchvision timm peft transformers accelerate \\
+    pandas numpy matplotlib seaborn scikit-learn scipy \\
+    pyyaml pillow tqdm safetensors huggingface_hub
 
 import torch
 import timm
 import peft
 import transformers
-import yaml
 
-print(f"torch (session) = {torch.__version__}")
-print(f"timm            = {timm.__version__}")
-print(f"peft            = {peft.__version__}")
-print(f"transformers    = {transformers.__version__}")
+assert torch.__version__.startswith("2.8.0"), f"torch {torch.__version__} != 2.8.0+cu128 (bundle wrong?)"
+assert transformers.__version__ == "4.55.4", f"transformers {transformers.__version__} != 4.55.4"
+assert peft.__version__ == "0.15.2", f"peft {peft.__version__} != 0.15.2"
+import pandas
+assert pandas.__version__.split(".")[0] == "2", "pandas>=3 breaks sklearn (risk table)"
+logger.info(f"pip --no-index OK | torch={torch.__version__} timm={timm.__version__} "
+            f"peft={peft.__version__} transformers={transformers.__version__}")"""
+
+REPO_IMPORT_SRC = """import sys
+
+sys.path.insert(0, str(Path(REPO_SRC) / "code"))
+
+stubs = sorted(glob.glob(str(Path(REPO_SRC) / "code" / "modules" / "*_stub.py")))
+assert not stubs, f"Stub files still present (K0 not merged?): {stubs}"
 
 from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
 from configs.loader import load_config, build_model_kwargs
@@ -191,154 +205,342 @@ from datasets.bfree_dataset import BFreeDataset, DegradationPipeline
 from modules.lib_adapter import LIBAdapter
 from modules.gsr_adapter import GSRAdapter
 from modules.dcs_loss import DCSLoss, info_nce_loss
+import networks.bfree_globalforge_vit as _bgv
 
-cfg = load_config(os.path.join(REPO_DIR, "code", "configs", "bfree_dcs.yaml"))
-kwargs = build_model_kwargs(cfg)
-print("\\nModel kwargs from bfree_dcs.yaml:")
-for k, v in kwargs.items():
-    print(f"  {k} = {v}")
-print("\\nIMPORT VALIDATION OK")"""),
+logger.info(f"repo import OK from {_bgv.__file__} (no stubs — K0 verified)")"""
 
-    ("code", """import os
-import shutil
+# =====================================================================
+# Notebook 01 — Setup Online (bundle builder)
+# =====================================================================
+
+NB01_CELLS = [
+    ("md", """# B-Free x GlobalForge — Notebook 01: Setup Online (bundle builder)
+
+**Target A: Kaggle CPU hoặc T4×2, Internet ON.** Notebook này tạo **toàn bộ assets offline** cho notebooks 02 (train) / 03 (eval), vốn chạy trên **Target B: RTX PRO 6000 Blackwell 96GB, hoàn toàn offline** (không pip internet, không git, không HF hub).
+
+## Chuỗi pipeline (3 notebook, khép kín)
+
+```
+[01] setup-online (CPU/T4, online)
+      |- wheels_rtxpro6000/   : pin stack wheels (linux x86_64, py3.11)
+      |- models/vit_base_patch14_reg4_dinov2/  : DINOv2 ViT-B/14 reg4 (D5)
+      |- bfree_src/            : repo P-Bao/B-Free @ integration/loss-backbone
+      |- manifest.json        : versions + SHA256 + sizes
+      v  (Save Version -> attach output này làm Input của 02)
+[02] training (RTX PRO 6000, offline)  -> bfree_globalforge_lora_r16.pth + train_log.csv
+      v  (Save Version -> attach output này làm Input của 03)
+[03] eval (RTX PRO 6000, offline)      -> eval_results.csv + bar + heatmap
+```
+
+Giữa các notebook chỉ có thao tác Kaggle-native: **Save Version → attach output làm input** — không bước chuẩn bị thủ công nào khác.
+
+**Input ngoài duy nhất** (attach thêm vào 02/03, upload thủ công một lần): B-Free training data (grip.unina.it) cho 02; baseline weights + GlobalForge assets + wild benchmarks cho 03 (liệt kê chi tiết trong từng notebook)."""),
+
+    ("code", """# ============================================================
+# Cell 1 - Pin versions (locked stack, plan.md)
+# ============================================================
+TORCH_VERSION = "2.8.0+cu128"     # RTX Pro 6000 Blackwell (sm_120) needs torch>=2.8 cu128
+TORCHVISION_VERSION = "0.23.0+cu128"
+TIMM_VERSION = "1.0.22"
+PEFT_VERSION = "0.15.2"
+TRANSFORMERS_VERSION = "4.55.4"
+PANDAS_VERSION = "2.3.3"         # MUST <3 (breaks sklearn at >=3)
+NUMPY_VERSION = "1.26.4"
+CUDA_TAG = "cu128"
+REPO_URL = "https://github.com/P-Bao/B-Free.git"
+BRANCH = "integration/loss-backbone"
+DINOV2_HF_REPO = "timm/vit_base_patch14_reg4_dinov2.lvd142m"
+
+print(f"TORCH_VERSION         = {TORCH_VERSION}")
+print(f"TORCHVISION_VERSION   = {TORCHVISION_VERSION}")
+print(f"TIMM_VERSION          = {TIMM_VERSION}")
+print(f"PEFT_VERSION          = {PEFT_VERSION}")
+print(f"TRANSFORMERS_VERSION  = {TRANSFORMERS_VERSION}")
+print(f"PANDAS_VERSION        = {PANDAS_VERSION}")
+print(f"NUMPY_VERSION         = {NUMPY_VERSION}")
+print(f"CUDA_TAG              = {CUDA_TAG}")
+print(f"REPO                 = {REPO_URL} @ {BRANCH}")"""),
+
+    ("md", """## 1. Chốt version môi trường
+
+Probe môi trường **Target A** (session này). Wheels tải ở đây phải khớp **Target B** — Kaggle dùng chung image Linux x86_64 + Python 3.11 cho mọi accelerator, nên assert Python 3.11 để chắc chắn."""),
+
+    ("code", """import platform
+import subprocess
+import sys
+
+print("=" * 60)
+print("Environment probe (Target A: online session)")
+print("=" * 60)
+print(f"python   = {platform.python_version()}")
+print(f"platform = {platform.platform()}")
+
+assert sys.version_info[:2] == (3, 11), (
+    f"This session runs Python {sys.version_info[:2]} but Kaggle Target B uses 3.11 — "
+    "wheels would not match. Switch the session to Python 3.11 and re-run.")
+
+try:
+    out = subprocess.run(["nvidia-smi"], capture_output=True, text=True, check=True)
+    print(out.stdout.splitlines()[2] if len(out.stdout.splitlines()) > 2 else "nvidia-smi ok")
+except Exception:
+    print("nvidia-smi not available (CPU session) — fine, this notebook only downloads assets.")"""),
+
+    ("md", """## 2. Tải wheel cho Target B (RTX PRO 6000)
+
+- `torch` / `torchvision`: từ **PyTorch cu128 index**, `--no-deps` (wheel cu128 đã bundle CUDA runtime, không cần kéo `nvidia-*`/`pytorch-triton`).
+- Còn lại: **`--no-deps` từng package + đầy đủ leaf dependencies** (filelock, fsspec, tokenizers, ...) để `pip install --no-index` trên Target B tự chủ hoàn toàn, không phụ thuộc version preinstall của image đích."""),
+
+    ("code", """from pathlib import Path
+
+WHEELS = Path("/kaggle/working/wheels_rtxpro6000")
+WHEELS.mkdir(parents=True, exist_ok=True)
+PYTORCH_INDEX = f"https://download.pytorch.org/whl/{CUDA_TAG}"
+print(f"PyTorch index: {PYTORCH_INDEX}\\n")
+
+!pip download torch=={TORCH_VERSION} \\
+    --index-url {PYTORCH_INDEX} --no-deps -d {WHEELS} 2>&1 | tail -3
+!pip download torchvision=={TORCHVISION_VERSION} \\
+    --index-url {PYTORCH_INDEX} --no-deps -d {WHEELS} 2>&1 | tail -3
+
+for p in sorted(WHEELS.glob("*.whl")):
+    print(f"  {p.name:60s} {p.stat().st_size/1024/1024:8.1f} MB")"""),
+
+    ("code", """# Pin stack còn lại + đầy đủ leaf deps (đủ cho pip --no-index trên Target B)
+_pkgs_pinned = [
+    f"timm=={TIMM_VERSION}",
+    f"peft=={PEFT_VERSION}",
+    f"transformers=={TRANSFORMERS_VERSION}",
+    f"pandas=={PANDAS_VERSION}",
+    f"numpy=={NUMPY_VERSION}",
+    "matplotlib==3.11.1",
+    "seaborn==0.13.2",
+]
+_pkgs_loose = [
+    "scikit-learn", "scipy", "pyyaml", "pillow", "tqdm", "safetensors",
+    "huggingface_hub", "accelerate",
+    # leaf dependencies (thiếu cái nào pip --no-index sẽ fail nếu image đích không có)
+    "filelock", "fsspec", "packaging", "typing-extensions", "regex",
+    "requests", "certifi", "charset-normalizer", "idna", "urllib3",
+    "tokenizers", "psutil", "joblib", "threadpoolctl",
+    "python-dateutil", "six", "pytz", "tzdata",
+    "contourpy", "cycler", "fonttools", "kiwisolver", "pyparsing",
+]
+for pkg in _pkgs_pinned + _pkgs_loose:
+    print(f">>> pip download {pkg}")
+    !pip download {pkg} --no-deps -d {WHEELS} 2>&1 | tail -2
+
+import subprocess
+n_whl = len(list(WHEELS.glob("*.whl")))
+total_gb = sum(p.stat().st_size for p in WHEELS.glob("*.whl")) / 1024**3
+print(f"\\n{WHEELS}: {n_whl} wheels, {total_gb:.2f} GB")
+assert n_whl >= 35, "wheels look incomplete (expected >=35 incl. leaf deps)""" + '"'),
+
+    ("md", """## 3. Tải DINOv2 ViT-B/14 reg4 (backbone pretrained — D5)
+
+Tải `model.safetensors` từ HF hub `timm/vit_base_patch14_reg4_dinov2.lvd142m` (~330MB) — Target B offline sẽ init backbone từ file này (notebook 02 resample `pos_embed` 518px → 504px khi load)."""),
+
+    ("code", """import shutil
+from pathlib import Path
 
 from huggingface_hub import hf_hub_download
 
-PRETRAIN_DIR = "/kaggle/working/dinov2-vitb14-reg4-pretrain"
-os.makedirs(PRETRAIN_DIR, exist_ok=True)
+MODELS = Path("/kaggle/working/models")
+MODELS.mkdir(parents=True, exist_ok=True)
+DINO_OUT = MODELS / "vit_base_patch14_reg4_dinov2"
+DINO_OUT.mkdir(exist_ok=True)
 
-src = hf_hub_download(repo_id="timm/vit_base_patch14_reg4_dinov2.lvd142m",
-                      filename="model.safetensors")
-dst = os.path.join(PRETRAIN_DIR, "model.safetensors")
-shutil.copyfile(src, dst)
-print(f"saved: {dst} ({os.path.getsize(dst) / 1024**2:.1f} MB)")
+dst = DINO_OUT / "model.safetensors"
+if dst.exists():
+    print(f"[skip] already at {dst}")
+else:
+    src = hf_hub_download(repo_id=DINOV2_HF_REPO, filename="model.safetensors")
+    shutil.copyfile(src, dst)
+print(f"saved: {dst} ({dst.stat().st_size/1024**2:.1f} MB)")
 
 from safetensors.torch import load_file
 
-sd = load_file(dst)
-embed_dim = sd["patch_embed.proj.weight"].shape[0]
+sd = load_file(str(dst))
 pe = sd["pos_embed"]
-print(f"state dict: {len(sd)} tensors | embed_dim={embed_dim} | pos_embed={tuple(pe.shape)}")
-assert embed_dim == 768, "not a ViT-B checkpoint"
+assert sd["patch_embed.proj.weight"].shape[0] == 768, "not a ViT-B checkpoint"
 assert tuple(pe.shape) == (1, 37 * 37 + 5, 768), (
-    f"unexpected pos_embed shape {tuple(pe.shape)} — expected 518px grid (37x37) + 5 prefix tokens")
-print("DINOv2 ViT-B/14 reg4 weights OK (518px grid 37x37 + 5 prefix tokens)")"""),
+    f"unexpected pos_embed {tuple(pe.shape)} — expected 518px grid (37x37) + 5 prefix tokens")
+print(f"OK: {len(sd)} tensors | embed_dim=768 | pos_embed {tuple(pe.shape)} (518px grid + 5 prefix)")"""),
 
-    ("code", """import torch
+    ("md", """## 4. Copy B-Free repo source (branch `integration/loss-backbone`)
 
-model_smoke = BFreeGlobalForgeViT(img_size=224, pretrained=False)
-x = torch.randn(2, 3, 224, 224)
-with torch.no_grad():
-    out = model_smoke(x)
-print(f"CPU smoke test: logits {tuple(out['logits'].shape)}, cls {tuple(out['cls'].shape)}")
-assert out["logits"].shape == (2, 2) and out["cls"].shape == (2, 768)
-del model_smoke, x, out
-print("MODEL SMOKE OK")"""),
+Target B offline không git clone được → đóng gói source vào bundle (bỏ `.git`, `__pycache__`). Sau đó **smoke test trên CPU** để xác nhận bundle model (backbone + real LIB/GSR + L_DCS) import + forward + `compute_loss` + backward chạy đúng — đây là verify cuối cùng trước khi vào offline."""),
 
     ("code", """import glob
-import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-PIN_STACK = {
-    "torch": "2.8.0+cu128",
-    "torchvision": "0.23.0+cu128",
-    "timm": "1.0.22",
-    "peft": "0.15.2",
-    "transformers": "4.55.4",
-    "pandas": "2.3.3",
-    "numpy": "1.26.4",
-    "matplotlib": "3.11.1",
-    "seaborn": "0.13.2",
+BFREE_SRC = Path("/kaggle/working/bfree_src")
+if BFREE_SRC.exists():
+    shutil.rmtree(BFREE_SRC)
+subprocess.run(["git", "clone", "--depth", "1", "--branch", BRANCH, REPO_URL, str(BFREE_SRC)], check=True)
+
+shutil.rmtree(BFREE_SRC / ".git", ignore_errors=True)
+for p in BFREE_SRC.rglob("__pycache__"):
+    shutil.rmtree(p, ignore_errors=True)
+
+assert (BFREE_SRC / "code/networks/bfree_globalforge_vit.py").is_file(), "clone failed: backbone file missing"
+assert not glob.glob(str(BFREE_SRC / "code/modules/*_stub.py")), "stub files present — K0 not merged?"
+n_py = len(list(BFREE_SRC.rglob("*.py")))
+print(f"OK: {BFREE_SRC} ({n_py} .py files, .git removed, no stubs — K0 verified)")"""),
+
+    ("code", """# Smoke test tren CPU: import + forward + compute_loss + backward (224px)
+import sys
+
+sys.path.insert(0, str(BFREE_SRC / "code"))
+
+import torch
+
+from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
+
+model = BFreeGlobalForgeViT(img_size=224, pretrained=False)
+x1 = torch.randn(2, 3, 224, 224)
+x2 = torch.randn(2, 3, 224, 224)
+y = torch.tensor([0, 1])
+with torch.no_grad():
+    out = model(x1)
+assert out["logits"].shape == (2, 2) and out["cls"].shape == (2, 768)
+total, ce, dcs = model.compute_loss(x1, x2, y)
+total.backward()
+print(f"SMOKE OK | logits {tuple(out['logits'].shape)} | total={float(total):.4f} "
+      f"ce={float(ce):.4f} dcs={float(dcs):.4f} | backward OK")"""),
+
+    ("md", """## 5. Manifest + tổng kết
+
+Ghi `manifest.json` (versions + SHA256 từng file + size từng component) — Target B dùng để kiểm tra tính toàn vẹn của bundle sau khi attach."""),
+
+    ("code", """import hashlib
+import json
+import platform
+import subprocess
+from datetime import datetime, timezone
+from pathlib import Path
+
+WORK = Path("/kaggle/working")
+
+
+def sha256_file(p):
+    h = hashlib.sha256()
+    with open(p, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+manifest = {
+    "created_utc": datetime.now(timezone.utc).isoformat(),
+    "python": platform.python_version(),
+    "cuda_tag_for_rtxpro6000": CUDA_TAG,
+    "repo": {"url": REPO_URL, "branch": BRANCH},
+    "dinov2_hf_repo": DINOV2_HF_REPO,
+    "pins": {
+        "torch": TORCH_VERSION, "torchvision": TORCHVISION_VERSION,
+        "timm": TIMM_VERSION, "peft": PEFT_VERSION,
+        "transformers": TRANSFORMERS_VERSION, "pandas": PANDAS_VERSION,
+        "numpy": NUMPY_VERSION, "matplotlib": "3.11.1", "seaborn": "0.13.2",
+    },
+    "components": {},
 }
 
-wheels = sorted(glob.glob(os.path.join(WHEELS_DIR, "*.whl")))
-names = {os.path.basename(w).split("-")[0].replace("_", "-").lower() for w in wheels}
-missing = [f"{pkg}=={ver}" for pkg, ver in PIN_STACK.items() if pkg not in names]
-assert not missing, f"Missing pinned wheels in bundle: {missing}"
-assert os.path.isfile(os.path.join(PRETRAIN_DIR, "model.safetensors")), "model.safetensors missing"
+for sd in ["wheels_rtxpro6000", "models", "bfree_src"]:
+    root = WORK / sd
+    if not root.exists():
+        continue
+    files = sorted(p for p in root.rglob("*") if p.is_file())
+    manifest["components"][sd] = {
+        "file_count": len(files),
+        "total_mb": sum(p.stat().st_size for p in files) / 1024**2,
+        "sha256": {str(p.relative_to(WORK)): sha256_file(p) for p in files},
+    }
 
-total_gb = sum(os.path.getsize(w) for w in wheels) / 1024**3
-print(f"bundle check OK: {len(wheels)} wheels ({total_gb:.2f} GB) + DINOv2 ViT-B/14 reg4 weights")
-for w in wheels[:40]:
-    print(f"  {os.path.basename(w)}")"""),
+out = WORK / "manifest.json"
+out.write_text(json.dumps(manifest, indent=2, ensure_ascii=False))
+print(f"[OK] {out} ({out.stat().st_size/1024:.1f} KB)\\n")
+print(f"{'component':<22} {'files':>7} {'size (MB)':>10}")
+print("-" * 45)
+for name, info in manifest["components"].items():
+    print(f"{name:<22} {info['file_count']:>7} {info['total_mb']:>10.1f}")"""),
 
     ("md", """## Bundle Ready (K1 pass)
 
-Output trong `/kaggle/working/`:
-- `bfree-wheels/` — wheel bundle pin stack đầy đủ (Linux x86_64, Python 3.11) cho `pip install --no-index`
-- `dinov2-vitb14-reg4-pretrain/model.safetensors` — DINOv2 ViT-B/14 reg4 pretrained (D5); notebook 02 sẽ resample `pos_embed` 518px→504px khi load
+`/kaggle/working/` giờ chứa **đầy đủ assets offline**:
+- `wheels_rtxpro6000/` — pin stack + leaf deps (linux x86_64, py3.11)
+- `models/vit_base_patch14_reg4_dinov2/model.safetensors` — DINOv2 ViT-B/14 reg4 (D5)
+- `bfree_src/` — repo `integration/loss-backbone` (đã smoke test)
+- `manifest.json` — versions + SHA256
 
-**Bước tiếp theo (bắt buộc):**
+**Bước giao tiếp giữa notebook (Kaggle-native, bắt buộc):**
 1. **Save Version → Save & Run All (Commit)** để chốt output.
-2. Tab **Output** của notebook này → **New Dataset** cho từng thư mục:
-   - `bfree-wheels/` → dataset `bfree-wheels`
-   - `dinov2-vitb14-reg4-pretrain/` → dataset `dinov2-vitb14-reg4-pretrain`
-3. Attach 2 dataset đó vào `02_bfree_kaggle_train.ipynb` và `03_bfree_kaggle_eval.ipynb` (chạy offline trên RTX PRO 6000)."""),
+2. Mở notebooks 02/03 → **Add Input → Your Work → notebook 01 này** (output của nó thành input `/kaggle/input/<slug>/...` chứa `wheels_rtxpro6000/`, `bfree_src/`, `models/`).
+3. 02 cần thêm input ngoài: **B-Free training data** (upload dataset có `COCO_real_512/` + 6 thư mục `SD2.1_*/`).
+4. 03 cần thêm: **K2 output** (notebook 02), **B-Free baseline weights**, **GlobalForge assets**, **wild benchmarks** (chi tiết trong notebook 03)."""),
 ]
 
 # =====================================================================
-# Notebook 02 — Kaggle Training (K2)
+# Notebook 02 — Training (offline)
 # =====================================================================
 
 NB02_CELLS = [
     ("md", """# B-Free x GlobalForge — Notebook 02: Kaggle Training (K2, LoRA r=16)
 
-Huấn luyện **DINOv2 ViT-B/14 reg4 + LIB + GSR + L_DCS** (LoRA r=16, α=32) trên B-Free training data (51.517 real + 309.102 fake = 6 fake variants/ID), 504×504, 8 epochs, bf16.
+**Target B: RTX PRO 6000 Blackwell 96GB, hoàn toàn OFFLINE.** Huấn luyện **DINOv2 ViT-B/14 reg4 + LIB + GSR + L_DCS** (LoRA r=16, α=32) trên B-Free training data (51.517 real + 309.102 fake), 504×504, 8 epochs, bf16.
 
-**Locked decisions (plan.md D1–D10):**
-- D1 `lambda_dcs=0.01`, `dcs_tau=0.07`, `label_smoothing=0.1`
-- D2 8 epochs @ 504px — D3 full data (no subsample)
-- D4 50/50 per-ID pairing: p=0.5 real else random 1/6 fake variant (resample mỗi epoch)
-- D5 DINOv2 pretrained init **offline từ local weights** (không HF hub)
-- D6 auto batch size (0.9× VRAM) — D7 bf16 autocast
-- AdamW lr=1e-4 wd=1e-4 · CosineAnnealingLR eta_min=1e-7 per-step · grad clip 1.0
-- Val split `md5(id)%100 < 3`; mỗi val ID = 1 real + 1 deterministic fake (balanced)
+**Inputs (attach trước khi chạy):**
+1. **Output notebook 01** (wheels + bfree_src + DINOv2 weights + manifest) — qua *Add Input → Your Work → notebook 01*
+2. **B-Free training data** (upload một lần từ grip.unina.it): dataset chứa `COCO_real_512/` + 6 thư mục `SD2.1_*/` (fake variants dùng cùng tên file với real)
 
-**Yêu cầu Kaggle inputs:**
-- `bfree-wheels` — wheel bundle **do notebook 01 tạo** (CPU/T4 online session, Save Version → New Dataset)
-- `bfree-training-data` — B-Free training dataset (tải từ grip.unina.it): `COCO_real_512/` + 6 thư mục `SD2.1_*/`, fake variant dùng **cùng tên file** với ảnh real tương ứng
-- `dinov2-vitb14-reg4-pretrain` — weights `timm/vit_base_patch14_reg4_dinov2.lvd142m` (`model.safetensors`, ~330MB) **do notebook 01 tạo**, cho offline pretrained init (D5)
+**Locked decisions (plan.md D1–D10):** D1 lambda_dcs=0.01, tau=0.07, ls=0.1 · D2 8 epochs @504px · D3 full data · D4 50/50 per-ID pairing (p=0.5 real else random 1/6 fake) · D5 DINOv2 pretrained init offline · D6 auto batch size (0.9×VRAM) · D7 bf16 autocast · AdamW lr=1e-4 wd=1e-4, cosine eta_min=1e-7 per-step, clip 1.0 · val split `md5(id)%100<3`, mỗi ID = 1 real + 1 deterministic fake (balanced).
 
-> Notebook này chạy **offline hoàn toàn** trên RTX PRO 6000: KHÔNG apt-get, KHÔNG internet.pip (chỉ `--no-index` từ bundle), KHÔNG HF hub download trong runtime. Log riêng CE và DCS mỗi epoch (rule agent.md) → `train_log.csv` cho K4 / Phase 8."""),
+> **Vì sao không gọi `train_lora.py` trực tiếp?** Script của repo (a) yêu cầu CSV tĩnh `filename,label` — không thực hiện được pairing động D4 (resample mỗi epoch); (b) loop của nó **fp32**, vi phạm D7 (bf16 autocast); (c) không có đường load pretrained offline D5 (resample pos_embed 518→504); (d) checkpoint của nó thiếu CONFIG + train_log mà K3 cần. Notebook này **tái sử dụng repo như thư viện** — `BFreeGlobalForgeViT`, `DegradationPipeline`, `apply_lora_to_backbone`, `dmetrics` — đúng tinh thần hợp đồng `MODULES_INTERFACE.md`, chỉ thay phần orchestration cho khớp D4/D5/D6/D7."""),
 
-    PIP_INSTALL_CELLS[0],
+    ("code", OFFLINE_LOGGER_SRC),
 
-    CLONE_CELL,
+    ("code", BUNDLE_DISCOVERY_SRC + """
 
-    ("code", """import sys
+# ---- external input: B-Free training data (COCO_real_512 + SD2.1_*) ----
+TRAIN_DATA_ROOT = None
+for cand in sorted(glob.glob("/kaggle/input/*/")) + ["/kaggle/input/"]:
+    for rel in ("COCO_real_512", "bfree-training-data/COCO_real_512"):
+        if Path(cand, rel).is_dir():
+            TRAIN_DATA_ROOT = Path(cand, rel).parent
+            break
+    if TRAIN_DATA_ROOT is not None:
+        break
+if TRAIN_DATA_ROOT is None:
+    raise FileNotFoundError(
+        "B-Free training data not found: no /kaggle/input/*/COCO_real_512. "
+        "Upload it (grip.unina.it training_data) as a Kaggle dataset and attach.")
+logger.info(f"TRAIN_DATA_ROOT = {TRAIN_DATA_ROOT}")
 
-sys.path.insert(0, os.path.join(REPO_DIR, "code"))
+OUTPUTS = WORK
+OUTPUTS.mkdir(parents=True, exist_ok=True)
+_fh = logging.FileHandler(str(OUTPUTS / "train_log.txt"), mode="a", encoding="utf-8")
+_fh.setFormatter(logging.Formatter(fmt="%(asctime)s | %(levelname)-7s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+logger.addHandler(_fh)"""),
 
-import glob
-import hashlib
+    ("code", OFFLINE_ENV_SRC),
+
+    ("code", PIP_INSTALL_SRC),
+
+    ("code", REPO_IMPORT_SRC),
+
+    ("code", """# ============================================================
+# Hyperparameters (locked D1-D10) - everything lives here
+# ============================================================
 import random
 
 import numpy as np
-import torch
-import torch.nn as nn
-from PIL import Image
-from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR
-from torch.utils.data import DataLoader, Dataset
-import torchvision.transforms as T
-import torchvision.transforms.functional as TF
 
-from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
-from datasets.bfree_dataset import DegradationPipeline
-from train_lora import apply_lora_to_backbone
-from utils.normalization import get_list_norm
-from utils.dmetrics import balanced_accuracy_score, roc_auc_score
-
-DEVICE = "cuda:0"
-print(f"torch={torch.__version__}")
-print(f"GPU: {torch.cuda.get_device_name(0)}, "
-      f"{(getattr(torch.cuda.get_device_properties(0), 'total_mem', None) or getattr(torch.cuda.get_device_properties(0), 'total_memory')) / 1024**3:.1f} GB")"""),
-
-    ("code", """# ============ Hyperparameters (locked D1-D10 — mọi giá trị ở đây, không hardcode chỗ khác) ============
 CONFIG = {
     "arch": "vit_base_patch14_reg4_dinov2.lvd142m",
     "num_classes": 2,
     "img_size": 504,
-    "pretrained": True,            # D5: DINOv2 pretrained init (loaded offline ở cell model)
     "lambda_dcs": 0.01,            # D1
     "dcs_tau": 0.07,
     "label_smoothing": 0.1,
@@ -350,7 +552,7 @@ CONFIG = {
     "lora_rank": 16,
     "lora_alpha": 32,
     "lora_dropout": 0.05,
-    "lora_targets": ["qkv", "proj", "fc1", "fc2"],   # GlobalForge convention (apply_lora_to_backbone)
+    "lora_targets": ["qkv", "proj", "fc1", "fc2"],   # GlobalForge convention
     "lr": 1e-4,
     "weight_decay": 1e-4,
     "max_grad_norm": 1.0,
@@ -359,66 +561,71 @@ CONFIG = {
     "batch_hard_cap": 128,
     "val_md5_percentile": 3,        # md5(id)%100 < 3
     "val_fake_variant": "SD2.1_selfconditioned",
-    "pair_real_prob": 0.5,          # D4
+    "pair_real_prob": 0.5,         # D4
     "num_workers": 4,
     "seed": 42,
-    "data_root": "/kaggle/input/bfree-training-data",
-    "pretrain_weights_glob": "/kaggle/input/dinov2-vitb14-reg4-pretrain/*",
-    "output_dir": "/kaggle/working",
 }
-
-DATA_ROOT = CONFIG["data_root"]
-assert os.path.isdir(DATA_ROOT), (
-    f"Training data not found at {DATA_ROOT}. Attach 'bfree-training-data' "
-    "(download from https://www.grip.unina.it/download/prog/B-Free/training_data/)."
-)
+DEVICE = "cuda:0"
 
 random.seed(CONFIG["seed"])
 np.random.seed(CONFIG["seed"])
 torch.manual_seed(CONFIG["seed"])
 torch.cuda.manual_seed_all(CONFIG["seed"])
 
-REAL_DIR = os.path.join(DATA_ROOT, "COCO_real_512")
-FAKE_DIRS = sorted(d for d in glob.glob(os.path.join(DATA_ROOT, "SD2.1_*")) if os.path.isdir(d))
-assert os.path.isdir(REAL_DIR), f"COCO_real_512 missing under {DATA_ROOT}"
-assert len(FAKE_DIRS) == 6, f"Expected 6 SD2.1_* variant dirs, found {len(FAKE_DIRS)}: {FAKE_DIRS}"
+REAL_DIR = str(TRAIN_DATA_ROOT / "COCO_real_512")
+FAKE_DIRS = sorted(str(p) for p in TRAIN_DATA_ROOT.glob("SD2.1_*") if p.is_dir())
+assert Path(REAL_DIR).is_dir(), f"COCO_real_512 missing under {TRAIN_DATA_ROOT}"
+assert len(FAKE_DIRS) == 6, f"Expected 6 SD2.1_* dirs, found {len(FAKE_DIRS)}"
 for d in FAKE_DIRS:
-    print(f"  {os.path.basename(d)}: {len(glob.glob(os.path.join(d, '*')))} files")"""),
+    logger.info(f"  {Path(d).name}: {len(list(Path(d).glob('*')))} files")
+logger.info(f"CONFIG: {CONFIG}")"""),
 
     ("md", """### Dataset — 50/50 per-ID pairing (D4)
 
-`BFreeDataset` của repo nhận CSV tĩnh (filename,label) nên không pairing động theo ID được; cell dưới reuses `DegradationPipeline` của repo và cài đúng convention:
+`BFreeDataset` của repo nhận CSV tĩnh nên không pairing động theo ID được; cell dưới tái dùng `DegradationPipeline` của repo và cài đúng convention D4:
 
 - **Train**: 1 sample = 1 ID; `p=0.5` → real, ngược lại random 1/6 fake variant (resample mỗi `__getitem__` → 8 epochs phủ hết các variant).
-- **Val** (`md5(stem)%100 < 3`): mỗi ID cho 2 samples — index chẵn = real, lẻ = deterministic fake `SD2.1_selfconditioned` (fallback: variant khác có sẵn) → balanced.
-- Crop: train RandomCrop 504 (ảnh 512×512) + hflip 0.5; val center crop 504 — giống `BFreeDataset`.
-- Degraded view (cho L_DCS): áp cho cả train lẫn val (matching `BFreeDataset` — degradation unconditional), pipeline GlobalForge JPEG 20-80 → blur k7 σ0.5-1.5 p0.8 → jitter p0.8."""),
+- **Val** (`md5(stem)%100 < 3`): mỗi ID 2 samples — chẵn = real, lẻ = deterministic fake `SD2.1_selfconditioned` → balanced.
+- Crop: train RandomCrop 504 (ảnh 512×512) + hflip 0.5; val center crop 504.
+- Degraded view cho L_DCS: JPEG 20-80 → GaussianBlur k7 σ0.5-1.5 p0.8 → ColorJitter p0.8 (pipeline GlobalForge)."""),
 
-    ("code", """def build_stem_index(dirs):
+    ("code", """import hashlib
+
+from PIL import Image
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as T
+import torchvision.transforms.functional as TF
+
+from utils.normalization import get_list_norm
+
+
+def build_stem_index(dirs):
     maps = []
     for d in dirs:
         m = {}
-        for p in glob.glob(os.path.join(d, "*")):
-            if os.path.isfile(p):
-                m[os.path.splitext(os.path.basename(p))[0]] = p
+        for p in Path(d).glob("*"):
+            if p.is_file():
+                m[p.stem] = str(p)
         maps.append(m)
     return maps
 
 REAL_MAP = build_stem_index([REAL_DIR])[0]
 FAKE_MAPS = build_stem_index(FAKE_DIRS)
 ALL_STEMS = sorted(REAL_MAP.keys())
-print(f"real={len(REAL_MAP)}, fake variants={[len(m) for m in FAKE_MAPS]}")
+logger.info(f"real={len(REAL_MAP)}, fake variants={[len(m) for m in FAKE_MAPS]}")
+
 
 def is_val_id(stem):
     return int(hashlib.md5(stem.encode()).hexdigest(), 16) % 100 < CONFIG["val_md5_percentile"]
 
 TRAIN_IDS = [s for s in ALL_STEMS if not is_val_id(s)]
 VAL_IDS = [s for s in ALL_STEMS if is_val_id(s)]
-print(f"train IDs={len(TRAIN_IDS)}, val IDs={len(VAL_IDS)} (~{CONFIG['val_md5_percentile']}%)")
+logger.info(f"train IDs={len(TRAIN_IDS)}, val IDs={len(VAL_IDS)} (~{CONFIG['val_md5_percentile']}%)")
+
 
 class PairDataset(Dataset):
-    \"\"\"Train: p=0.5 real else random 1/6 fake variant (resample mỗi epoch).
-    Val: 2 samples/ID — chẵn=real, lẻ=deterministic fake variant (balanced).\"\"\"
+    '''Train: p=0.5 real else random 1/6 fake variant (resample moi epoch).
+    Val: 2 samples/ID - chan=real, le=deterministic fake variant (balanced).'''
 
     def __init__(self, ids, img_size, is_train, pair_real_prob, val_fake_variant):
         self.ids = ids
@@ -434,7 +641,7 @@ class PairDataset(Dataset):
 
     def _pick_val_fake(self, stem):
         for m, d in zip(FAKE_MAPS, FAKE_DIRS):
-            if os.path.basename(d) == self.val_fake_variant and stem in m:
+            if Path(d).name == self.val_fake_variant and stem in m:
                 return m[stem]
         for m in FAKE_MAPS:
             if stem in m:
@@ -474,78 +681,57 @@ train_ds = PairDataset(TRAIN_IDS, CONFIG["img_size"], True, CONFIG["pair_real_pr
 val_ds = PairDataset(VAL_IDS, CONFIG["img_size"], False, CONFIG["pair_real_prob"], CONFIG["val_fake_variant"])
 
 a, b, c = train_ds[0]
-print(f"train_ds: {len(train_ds)} samples | clean {tuple(a.shape)}, deg {tuple(b.shape)}, label {c}")
-a, b, c = val_ds[0]
 _, _, c2 = val_ds[1]
-print(f"val_ds  : {len(val_ds)} samples | labels {c},{c2} (expect 0,1)")
 assert tuple(a.shape) == (3, CONFIG["img_size"], CONFIG["img_size"])
+logger.info(f"train_ds={len(train_ds)}, val_ds={len(val_ds)} | labels val[0],val[1]={c},{c2} (expect 0,1)")
 
 def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
+    ws = torch.initial_seed() % 2**32
+    np.random.seed(ws)
+    random.seed(ws)
 
 g = torch.Generator()
 g.manual_seed(CONFIG["seed"])"""),
 
-    ("md", """### Model — BFreeGlobalForgeViT + LoRA r=16 (offline pretrained init)
+    ("md", """### Model — BFreeGlobalForgeViT + LoRA r=16 (offline pretrained init, D5)
 
-- Backbone `timm vit_base_patch14_reg4_dinov2.lvd142m`, `set_input_size(504)`, `num_classes=2`.
-- **Offline pretrained init (D5):** checkpoint DINOv2 mặc định là 518px (grid 37×37) → load vào model 504 (grid 36×36) cần **resample `pos_embed`** bằng `timm.layers.resample_abs_pos_embed` (đúng cách timm làm nội bộ). Head 2-class + LIB/GSR missing khi `strict=False` là behavior đúng.
-- LoRA r=16 α=32 dropout 0.05 target `qkv/proj/fc1/fc2` qua `apply_lora_to_backbone` của repo; LIB + GSR + `fc_norm` + `head` vẫn full-train."""),
+Load `model.safetensors` từ bundle notebook 01 vào backbone; **resample `pos_embed` 518px (37×37) → 504px (36×36)** vì checkpoint DINOv2 mặc định 518px; filter key+shape mismatch (head 2-class mới sẽ missing — đúng). Sau đó áp LoRA r=16 α=32 qua `apply_lora_to_backbone` của repo (target `qkv/proj/fc1/fc2`; LIB/GSR/fc_norm/head vẫn full-train)."""),
 
     ("code", """import math
 
 import torch
 
 
-def load_pretrained_backbone(model, glob_pattern):
-    \"\"\"D5 offline: load DINOv2 pretrained weights (.safetensors/.pth) vào model.model.
-    Resample pos_embed nếu grid checkpoint (thường 518px/37×37) khác grid model (504px/36×36).
-    Filter key+shape (bỏ head 1000-class của ckpt nếu có) trước khi load strict=False.\"\"\"
-    matches = [m for m in sorted(glob.glob(glob_pattern)) if m.endswith((".safetensors", ".pth", ".pt"))]
-    assert matches, f"No pretrained weights match {glob_pattern} — attach the dinov2 dataset."
-    path = matches[0]
-    print(f"Loading pretrained backbone from: {path}")
+def load_pretrained_backbone(model, safetensors_path):
+    '''D5 offline: load DINOv2 weights vao model.model + resample pos_embed 518->504.'''
+    from safetensors.torch import load_file
 
-    if path.endswith(".safetensors"):
-        from safetensors.torch import load_file
-        sd = load_file(path)
-    else:
-        sd = torch.load(path, map_location="cpu", weights_only=True)
-    if isinstance(sd, dict) and isinstance(sd.get("model"), dict):
-        sd = sd["model"]
+    sd = load_file(str(safetensors_path))
     sd = {k[len("model."):] if k.startswith("model.") else k: v for k, v in sd.items()}
 
     prefix = model.model.num_prefix_tokens
     if "pos_embed" in sd:
         pe = sd["pos_embed"]
-        n_patch_old = pe.shape[1] - prefix
-        old_hw = int(math.isqrt(n_patch_old))
+        old_hw = int(math.isqrt(pe.shape[1] - prefix))
         new_hw = model.model.patch_embed.grid_size[0]
         if old_hw != new_hw:
             from timm.layers.pos_embed import resample_abs_pos_embed
-            print(f"resample pos_embed: {old_hw}x{old_hw} -> {new_hw}x{new_hw}")
+            logger.info(f"resample pos_embed: {old_hw}x{old_hw} -> {new_hw}x{new_hw}")
             sd["pos_embed"] = resample_abs_pos_embed(
                 pe, new_size=model.model.patch_embed.grid_size,
-                old_size=(old_hw, old_hw), num_prefix_tokens=prefix,
-            )
+                old_size=(old_hw, old_hw), num_prefix_tokens=prefix)
 
     ref = model.model.state_dict()
     dropped = [k for k, v in sd.items() if k not in ref or ref[k].shape != v.shape]
-    if dropped:
-        print(f"dropped {len(dropped)} incompatible keys (e.g. {dropped[:4]})")
     sd = {k: v for k, v in sd.items() if k not in dropped}
 
     report = model.model.load_state_dict(sd, strict=False)
-    print(f"missing={len(report.missing_keys)} unexpected={len(report.unexpected_keys)}")
-    if report.missing_keys:
-        print("  missing:", report.missing_keys[:8])
-    assert set(report.missing_keys) <= {"head.weight", "head.bias"}, (
-        f"Backbone not fully initialized, missing: {report.missing_keys[:10]}")
+    logger.info(f"pretrained load: dropped={len(dropped)}, missing={report.missing_keys}")
+    assert set(report.missing_keys) <= {"head.weight", "head.bias"}, "backbone not fully initialized"
     assert not report.unexpected_keys
     return model
 
+from train_lora import apply_lora_to_backbone
 
 model = BFreeGlobalForgeViT(
     arch=CONFIG["arch"], num_classes=CONFIG["num_classes"],
@@ -556,18 +742,18 @@ model = BFreeGlobalForgeViT(
     dcs_tau=CONFIG["dcs_tau"], lambda_dcs=CONFIG["lambda_dcs"],
     label_smoothing=CONFIG["label_smoothing"],
 )
-model = load_pretrained_backbone(model, CONFIG["pretrain_weights_glob"])
+model = load_pretrained_backbone(model, DINOV2_SD)
 model = apply_lora_to_backbone(model, r=CONFIG["lora_rank"],
                                lora_alpha=CONFIG["lora_alpha"], lora_dropout=CONFIG["lora_dropout"])
 model.to(DEVICE)
 
 n_train = sum(p.numel() for p in model.parameters() if p.requires_grad)
 n_total = sum(p.numel() for p in model.parameters())
-print(f"trainable params: {n_train:,} / {n_total:,} ({100 * n_train / n_total:.2f}%)")"""),
+logger.info(f"trainable params: {n_train:,} / {n_total:,} ({100 * n_train / n_total:.2f}%)")"""),
 
     ("md", """### Auto batch size finder (D6)
 
-Binary search batch size lớn nhất mà `compute_loss` (2 forwards: clean + degraded, bf16 autocast, backward) chạy được không OOM. Bắt đầu từ 2, doubling tới khi OOM hoặc hard cap, rồi binary search giữa khoảng đó."""),
+Doubling từ 2 → OOM/hard-cap, rồi binary search — đo bằng chính `compute_loss` (2 forwards clean+degraded, bf16, backward)."""),
 
     ("code", """def try_batch(model, bs, img_size, device):
     torch.cuda.empty_cache()
@@ -597,7 +783,7 @@ def find_max_batch_size(model, img_size, device, hard_cap):
             hi = bs
             break
     if hi is None:
-        print(f"[warn] no OOM up to hard cap {hard_cap}")
+        logger.warning(f"no OOM up to hard cap {hard_cap}")
         hi = lo + 1
     while lo + 1 < hi:
         mid = (lo + hi) // 2
@@ -609,17 +795,20 @@ def find_max_batch_size(model, img_size, device, hard_cap):
 
 BATCH_SIZE = find_max_batch_size(model, CONFIG["img_size"], DEVICE, CONFIG["batch_hard_cap"])
 CONFIG["batch_size"] = BATCH_SIZE
-print(f"AUTO BATCH SIZE = {BATCH_SIZE}")"""),
+logger.info(f"AUTO BATCH SIZE = {BATCH_SIZE}")"""),
 
-    ("md", """### Training loop — 8 epochs, bf16 autocast, grad clip 1.0
+    ("md", """### Training loop — 8 epochs, bf16 autocast (D7), clip 1.0
 
-- `total = CE + lambda_dcs * DCS` qua `model.compute_loss` — log **riêng** CE và DCS.
-- AdamW (lr 1e-4, wd 1e-4) trên trainable params; CosineAnnealingLR `T_max = epochs * len(train_loader)`, `eta_min=1e-7`, step mỗi batch.
-- Lưu checkpoint **best theo val_bAcc** + checkpoint cuối; `train_log.csv` (epoch, train_loss, train_ce, train_dcs, val_loss, val_auc, val_bacc)."""),
+`total = CE + lambda_dcs * DCS` qua `model.compute_loss`; **log riêng CE và DCS** (rule agent.md) → `train_log.csv`; AdamW lr 1e-4 wd 1e-4; CosineAnnealingLR `T_max=epochs*len(train_loader)`, eta_min=1e-7, step mỗi batch; lưu checkpoint best theo val_bAcc + checkpoint cuối (kèm CONFIG — K3 cần)."""),
 
-    ("code", """train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
-                         num_workers=CONFIG["num_workers"], pin_memory=True, drop_last=True,
-                         persistent_workers=True, worker_init_fn=seed_worker, generator=g)
+    ("code", """from torch.optim import AdamW
+from torch.optim.lr_scheduler import CosineAnnealingLR
+
+from utils.dmetrics import balanced_accuracy_score, roc_auc_score
+
+train_loader = DataLoader(train_ds, batch_size=BATCH_SIZE, shuffle=True,
+                           num_workers=CONFIG["num_workers"], pin_memory=True, drop_last=True,
+                           persistent_workers=True, worker_init_fn=seed_worker, generator=g)
 val_loader = DataLoader(val_ds, batch_size=max(2, BATCH_SIZE // 2), shuffle=False,
                         num_workers=CONFIG["num_workers"], pin_memory=True)
 
@@ -650,10 +839,9 @@ def run_epoch(epoch):
         agg["dcs"] += float(dcs.detach()) * bs
         agg["n"] += bs
         if step % 20 == 0:
-            print(f"ep{epoch} step {step}/{len(train_loader)} | "
-                  f"total {agg['total']/max(agg['n'],1):.4f} (ce {agg['ce']/max(agg['n'],1):.4f}, "
-                  f"dcs {agg['dcs']/max(agg['n'],1):.4f}) | lr {optimizer.param_groups[0]['lr']:.2e}",
-                  flush=True)
+            logger.info(f"ep{epoch} step {step}/{len(train_loader)} | "
+                        f"total {agg['total']/max(agg['n'],1):.4f} (ce {agg['ce']/max(agg['n'],1):.4f}, "
+                        f"dcs {agg['dcs']/max(agg['n'],1):.4f}) | lr {optimizer.param_groups[0]['lr']:.2e}")
     return {k: agg[k] / max(agg["n"], 1) for k in ("total", "ce", "dcs")}
 
 
@@ -682,8 +870,7 @@ def run_val():
         "val_bacc": balanced_accuracy_score(labels_all, scores > 0),
     }
 
-
-LOG_CSV = os.path.join(CONFIG["output_dir"], "train_log.csv")
+LOG_CSV = OUTPUTS / "train_log.csv"
 with open(LOG_CSV, "w", encoding="utf-8") as f:
     f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc\\n")
 
@@ -692,11 +879,10 @@ best_bacc = 0.0
 for epoch in range(1, CONFIG["epochs"] + 1):
     tr = run_epoch(epoch)
     va = run_val()
-    print(f"--> epoch {epoch}: train total={tr['total']:.4f} (ce={tr['ce']:.4f}, dcs={tr['dcs']:.4f}) | "
-          f"val loss={va['val_loss']:.4f} auc={va['val_auc']:.4f} bacc={va['val_bacc']:.4f}", flush=True)
-    row = {"epoch": epoch, "train_loss": tr["total"], "train_ce": tr["ce"],
-           "train_dcs": tr["dcs"], **va}
-    TRAIN_LOG.append(row)
+    logger.info(f"--> epoch {epoch}: train total={tr['total']:.4f} (ce={tr['ce']:.4f}, dcs={tr['dcs']:.4f}) | "
+                f"val loss={va['val_loss']:.4f} auc={va['val_auc']:.4f} bacc={va['val_bacc']:.4f}")
+    TRAIN_LOG.append({"epoch": epoch, "train_loss": tr["total"], "train_ce": tr["ce"],
+                      "train_dcs": tr["dcs"], **va})
     with open(LOG_CSV, "a", encoding="utf-8") as f:
         f.write(f"{epoch},{tr['total']:.4f},{tr['ce']:.4f},{tr['dcs']:.4f},"
                 f"{va['val_loss']:.4f},{va['val_auc']:.4f},{va['val_bacc']:.4f}\\n")
@@ -704,13 +890,13 @@ for epoch in range(1, CONFIG["epochs"] + 1):
         best_bacc = va["val_bacc"]
         torch.save({"model": model.state_dict(), "epoch": epoch, "val_bacc": best_bacc,
                     "config": CONFIG},
-                   os.path.join(CONFIG["output_dir"], "bfree_globalforge_lora_r16_best.pth"))
-        print(f"[*] best checkpoint saved (epoch {epoch}, bAcc {best_bacc:.4f})", flush=True)
+                   OUTPUTS / "bfree_globalforge_lora_r16_best.pth")
+        logger.info(f"[*] best checkpoint saved (epoch {epoch}, bAcc {best_bacc:.4f})")
 
 torch.save({"model": model.state_dict(), "epoch": CONFIG["epochs"], "config": CONFIG,
             "train_log": TRAIN_LOG},
-           os.path.join(CONFIG["output_dir"], "bfree_globalforge_lora_r16.pth"))
-print("TRAINING COMPLETE")"""),
+           OUTPUTS / "bfree_globalforge_lora_r16.pth")
+logger.info("TRAINING COMPLETE")"""),
 
     ("code", """import matplotlib
 matplotlib.use("Agg")
@@ -732,103 +918,168 @@ axes[2].plot(df["epoch"], df["val_auc"], marker="o", label="AUC")
 axes[2].plot(df["epoch"], df["val_bacc"], marker="s", label="bAcc")
 axes[2].set_xlabel("epoch"); axes[2].set_title("Val metrics"); axes[2].legend()
 fig.tight_layout()
-fig.savefig(os.path.join(CONFIG["output_dir"], "training_curves.png"))
-print("saved training_curves.png")"""),
+fig.savefig(OUTPUTS / "training_curves.png")
+logger.info("saved training_curves.png")"""),
 
     ("md", """## Training Complete (K2)
 
 Outputs trong `/kaggle/working/`:
-- `bfree_globalforge_lora_r16.pth` — checkpoint cuối (model + config + train_log)
-- `bfree_globalforge_lora_r16_best.pth` — checkpoint best theo val_bAcc
-- `train_log.csv` — CE/DCS log riêng từng epoch (dùng cho K4 / Phase 8)
-- `training_curves.png`
+- `bfree_globalforge_lora_r16.pth` / `..._best.pth` — checkpoint cuối / best-val_bAcc (kèm CONFIG — K3 cần để tái tạo kiến trúc)
+- `train_log.csv` — CE/DCS riêng từng epoch (cho K4 / Phase 8)
+- `training_curves.png` · `train_log.txt` — log đầy đủ
 
-**K2 checklist:** chạy hết 8 epochs không lỗi · checkpoint saved · training log CSV + curves plot.
+**K2 checklist:** chạy hết 8 epochs không lỗi · checkpoint saved · training log CSV + curves.
 
-**Tiếp theo:** `03_bfree_kaggle_eval.ipynb` (3 models × 17 wild subsets + standard benchmarks)."""),
+**Bước giao tiếp:** **Save Version → Save & Run All (Commit)**, rồi mở notebook 03 → *Add Input → Your Work → notebook 02 này*.""" ),
 ]
 
 # =====================================================================
-# Notebook 03 — Kaggle Evaluation (K3)
+# Notebook 03 — Evaluation (offline)
 # =====================================================================
 
 NB03_CELLS = [
     ("md", """# B-Free x GlobalForge — Notebook 03: Evaluation (K3)
 
-Đánh giá **3 models** trên **17 in-the-wild subsets** + **standard benchmarks** (AIGCDetect, GenImage, UnivFD, DRCT, Synthbuster, EvalGEN):
+**Target B: RTX PRO 6000, hoàn toàn OFFLINE.** Đánh giá **3 models** trên **17 in-the-wild subsets** + **standard benchmarks** (AIGCDetect, GenImage, UnivFD, DRCT, Synthbuster, EvalGEN):
 
 | # | Model | Protocol |
 |---|-------|----------|
-| 1 | Integrated LoRA (output K2) | B-Free family: multi-crop 504 — 5 crops (center + 4 corners), replicate-pad ảnh < 504, **average logits** |
-| 2 | B-Free baseline `BFREE_dino2reg4` | Wrapper5crops gốc của repo (replicate + 5-crop ở mức embedding), num_classes=1 → score = logit |
-| 3 | GlobalForge released `REM vit_l_a` | **Protocol code thật** (`eval_in_the_wild.py` + `Get_Transforms`): short side ≤ 1296 → center-crop 224; > 1296 → resize 1296 rồi center-crop 224; PNG → JPEG round-trip q100; `Norm(imagenet)` trong model; softmax → log-odds |
+| 1 | Integrated LoRA (output K2) — **bắt buộc** | multi-crop 504: replicate-pad ảnh < 504, 5 crops (center + 4 corners), average logits |
+| 2 | B-Free baseline `BFREE_dino2reg4` | Wrapper5crops gốc của repo (replicate + 5-crop ở mức embedding), num_classes=1 |
+| 3 | GlobalForge released `REM vit_l_a` | **protocol code thật** `eval_in_the_wild.py`: short-side ≤ 1296 → center-crop 224, ngược lại resize 1296 rồi crop; PNG → JPEG q100; softmax → log-odds |
 
-Score = `logit_fake − logit_real` (models 1, 2); model 3 quy về logit bằng `log(p_fake/p_real)` để đồng bộ metrics. Metrics: **AUC, bAcc, NLL, ECE, Pd10, EER** (từ `code/utils/dmetrics.py` của repo).
+Score = `logit_fake − logit_real`; model 3 quy về logit `log(p/(1-p))`. Metrics: AUC, bAcc, NLL, ECE, Pd10, EER (`utils/dmetrics.py`). CO-SPY: `fake_only` (paper default). Grouped average theo parent dataset (giống `combine_parent_dataset_average`).
 
-**CO-SPY: `fake_only`** (paper default) — chỉ ảnh fake, bAcc = accuracy trên fake, các metric còn lại NaN.
-**Grouped average** (SynthWildx / WildRF / AIGIBench / CO-SPY / BFree): `combine_parent_dataset_average` — trung bình của trung bình các parent group (giống `eval_in_the_wild.py`).
+**Inputs (attach trước khi chạy):**
+1. **Output notebook 01** (wheels + repo source)
+2. **Output notebook 02** (checkpoint LoRA) — qua *Add Input → Your Work*
+3. `bfree-baseline-weights` — thư mục `BFREE_dino2reg4/` (config.yaml + weights .pth)
+4. `globalforge-code` (thư mục `code/` có `models/REM.py`) + `globalforge-backbone-vitla` (HF ViT-L `vit_l_a/`) + `globalforge-weights` (`checkpoint-best.pth.part_*` × 13, ~1.25GB)
+5. `wild-benchmarks` — DATA_ROOT 17 subsets layout `eval_in_the_wild.py` (Chameleon, synthwildx/…, WildRF/test/…, AIGIBench/…, CO-SPY-In-the-Wild/…, RRDataset, B-Free, realchain_CD; mỗi cái `0_real/` + `1_fake/`)
 
-**Yêu cầu Kaggle inputs:**
-- `bfree-wheels` — wheel bundle **do notebook 01 tạo** (CPU/T4 online session, Save Version → New Dataset)
-- `k2-output` — output notebook 02 (`bfree_globalforge_lora_r16.pth` hoặc `..._best.pth`)
-- `bfree-baseline-weights` — thư mục `BFREE_dino2reg4/` (config.yaml + weights .pth) từ https://grip-unina.github.io/B-Free/ (weights table), upload làm Dataset
-- `globalforge-code` — thư mục `code/` của GlobalForge (chứa `models/REM.py`), upload làm Dataset
-- `globalforge-backbone-vitla` — HF backbone ViT-L của GlobalForge: hoặc chính là thư mục model (`config.json` ở root) hoặc chứa thư mục con `vit_l_a/`, upload làm Dataset
-- `globalforge-weights` — checkpoint 13 parts `checkpoint-best.pth.part_*` (~1.25GB total), upload làm Dataset
-- `wild-benchmarks` — DATA_ROOT 17 subsets, layout như `eval_in_the_wild.py` (Chameleon, synthwildx/{dalle3,firefly,midjourney_v5}, WildRF/test/{facebook,reddit,twitter}, AIGIBench/{SocialRF,CommunityAI}, CO-SPY-In-the-Wild/{civitai,dalle3,instavibeai,lexica,midjourney}, RRDataset, B-Free, realchain_CD — mỗi cái có `0_real/` + `1_fake/`); standard benchmarks nằm cùng root (`AIGCDetect/`, `GenImage/`, ... cũng `0_real/1_fake`)
+> Models 2/3: nếu thiếu input thì **skip có cảnh báo** (đặt `SKIP_MISSING_MODELS = True`) — kết quả vẫn ra cho các model có sẵn; đặt `False` để fail sớm."""),
 
-> Notebook này chạy **offline hoàn toàn** trên RTX PRO 6000: KHÔNG apt-get, KHÔNG internet.pip (chỉ `--no-index` từ bundle), KHÔNG HF hub download trong runtime."""),
+    ("code", OFFLINE_LOGGER_SRC),
 
-    PIP_INSTALL_CELLS[0],
-
-    CLONE_CELL,
-
-    ("code", """import sys
-
-sys.path.insert(0, os.path.join(REPO_DIR, "code"))
-
-import glob
-import io
+    ("code", """import glob
 from pathlib import Path
 
-import numpy as np
-import pandas as pd
-import torch
-from PIL import Image, UnidentifiedImageError
-from torch.utils.data import Dataset
-import torchvision.transforms as T
-import torchvision.transforms.functional as TF
+WORK = Path("/kaggle/working")
 
-from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
-from train_lora import apply_lora_to_backbone
-from utils import dmetrics
-from utils.normalization import get_list_norm
 
-GF_CODE_DIR = "/kaggle/input/globalforge-code/code"
-GF_BACKBONE_INPUT = "/kaggle/input/globalforge-backbone-vitla"
-GF_CKPT_PARTS = "/kaggle/input/globalforge-weights"
-K2_OUTPUT_DIR = "/kaggle/input/k2-output"
-BFREE_WEIGHTS_DIR = "/kaggle/input/bfree-baseline-weights"
-DATA_ROOT = "/kaggle/input/wild-benchmarks"
+def find_one(patterns, what, optional=False):
+    for pat in patterns:
+        hits = sorted(glob.glob(pat))
+        if hits:
+            return hits[0]
+    if optional:
+        return None
+    raise FileNotFoundError(f"NOT FOUND: {what}\\nsearched: {list(patterns)}")
 
-sys.path.append(GF_CODE_DIR)
 
-DEVICE = "cuda:0"
-print(f"torch={torch.__version__}")
-print(f"GPU: {torch.cuda.get_device_name(0)}")"""),
+def find_dir_containing(marker_rel, patterns, what, optional=False):
+    for pat in patterns:
+        for hit in sorted(glob.glob(pat)):
+            root = Path(hit)
+            while root != Path("/kaggle/input") and root != root.parent:
+                if (root / marker_rel).is_file():
+                    return root
+                root = root.parent
+    if optional:
+        return None
+    raise FileNotFoundError(f"NOT FOUND: {what} (marker: {marker_rel})")
 
-    ("code", """# ============ Model 1: Integrated LoRA (K2 output) ============
 
-def load_integrated_lora(k2_output_dir, device=DEVICE):
-    candidates = ["bfree_globalforge_lora_r16.pth", "bfree_globalforge_lora_r16_best.pth"]
-    ckpt_path = next((os.path.join(k2_output_dir, c) for c in candidates
-                      if os.path.isfile(os.path.join(k2_output_dir, c))), None)
-    assert ckpt_path, f"No K2 checkpoint found in {k2_output_dir} (expected {candidates})."
-    print(f"Loading Integrated LoRA from: {ckpt_path}")
+SKIP_MISSING_MODELS = True   # False = fail sớm nếu model 2/3 thiếu input
 
+# ---- bundle cua notebook 01 ----
+WHEELS_DIR = find_one(
+    ["/kaggle/input/*/wheels_rtxpro6000", "/kaggle/input/wheels_rtxpro6000",
+     "/kaggle/input/*/wheels*", "/kaggle/input/wheels*"],
+    "wheel bundle (output of notebook 01)")
+REPO_SRC = find_dir_containing(
+    "code/networks/bfree_globalforge_vit.py",
+    ["/kaggle/input/*/bfree_src/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/bfree_src*/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/*/B-Free/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/B-Free*/code/networks/bfree_globalforge_vit.py",
+     "/kaggle/input/*/code/networks/bfree_globalforge_vit.py"],
+    "B-Free repo source (output of notebook 01)")
+
+# ---- K2 checkpoint (output notebook 02) ----
+K2_CKPT = find_one(
+    ["/kaggle/input/*/bfree_globalforge_lora_r16.pth",
+     "/kaggle/input/bfree_globalforge_lora_r16.pth",
+     "/kaggle/input/*/bfree_globalforge_lora_r16_best.pth",
+     "/kaggle/input/bfree_globalforge_lora_r16_best.pth"],
+    "K2 LoRA checkpoint (output of notebook 02)")
+
+# ---- optional: B-Free baseline weights ----
+BFREE_WEIGHTS_DIR = find_dir_containing(
+    "config.yaml",
+    ["/kaggle/input/*/BFREE_dino2reg4/config.yaml",
+     "/kaggle/input/BFREE_dino2reg4/config.yaml",
+     "/kaggle/input/*/bfree-baseline-weights/BFREE_dino2reg4/config.yaml"],
+    "B-Free baseline weights (BFREE_dino2reg4/)", optional=SKIP_MISSING_MODELS)
+
+# ---- optional: GlobalForge code + backbone + ckpt parts ----
+GF_CODE_DIR = find_dir_containing(
+    "models/REM.py",
+    ["/kaggle/input/*/code/models/REM.py",
+     "/kaggle/input/code/models/REM.py",
+     "/kaggle/input/*/globalforge*/code/models/REM.py"],
+    "GlobalForge code (models/REM.py)", optional=SKIP_MISSING_MODELS)
+GF_BACKBONE_VITLA = find_one(
+    ["/kaggle/input/*/vit_l_a/config.json", "/kaggle/input/vit_l_a/config.json",
+     "/kaggle/input/*/globalforge-backbone-vitla/vit_l_a/config.json"],
+    "GlobalForge HF backbone vit_l_a/", optional=SKIP_MISSING_MODELS)
+GF_CKPT_PARTS_DIR = find_one(
+    ["/kaggle/input/*/checkpoint-best.pth.part_aa", "/kaggle/input/checkpoint-best.pth.part_aa",
+     "/kaggle/input/*/globalforge-weights/checkpoint-best.pth.part_aa"],
+    "GlobalForge checkpoint parts (checkpoint-best.pth.part_*)", optional=SKIP_MISSING_MODELS)
+GF_CKPT_ASSEMBLED = find_one(
+    ["/kaggle/input/*/checkpoint-best.pth", "/kaggle/input/checkpoint-best.pth"],
+    "assembled GlobalForge checkpoint", optional=SKIP_MISSING_MODELS)
+
+# ---- wild + standard benchmarks root ----
+WILD_MARKERS = ["Chameleon/0_real", "synthwildx", "WildRF/test", "AIGIBench",
+                "CO-SPY-In-the-Wild", "RRDataset", "realchain_CD"]
+DATA_ROOT = None
+for cand in sorted(glob.glob("/kaggle/input/*/")) + ["/kaggle/input/"]:
+    if any(Path(cand, m).exists() for m in WILD_MARKERS):
+        DATA_ROOT = Path(cand)
+        break
+if DATA_ROOT is None:
+    raise FileNotFoundError("wild benchmarks root not found under /kaggle/input — attach 'wild-benchmarks'.")
+
+wheels = sorted(glob.glob(str(Path(WHEELS_DIR) / "*.whl")))
+assert wheels, f"No .whl files inside {WHEELS_DIR}"
+logger.info(f"WHEELS_DIR   = {WHEELS_DIR} ({len(wheels)} wheels)")
+logger.info(f"REPO_SRC     = {REPO_SRC}")
+logger.info(f"K2_CKPT      = {K2_CKPT}")
+logger.info(f"BFREE_WEIGHT = {BFREE_WEIGHTS_DIR}")
+logger.info(f"GF_CODE      = {GF_CODE_DIR}")
+logger.info(f"GF_BACKBONE  = {GF_BACKBONE_VITLA}")
+logger.info(f"GF_PARTS     = {GF_CKPT_PARTS_DIR} | assembled={GF_CKPT_ASSEMBLED}")
+logger.info(f"DATA_ROOT    = {DATA_ROOT}")"""),
+
+    ("code", OFFLINE_ENV_SRC),
+
+    ("code", PIP_INSTALL_SRC),
+
+    ("code", REPO_IMPORT_SRC),
+
+    ("md", """### Model 1 — Integrated LoRA (K2 output, bắt buộc)
+
+Tái tạo đúng kiến trúc từ CONFIG trong checkpoint (kể cả LoRA wrap cùng rank) rồi load state dict."""),
+
+    ("code", """import torch
+
+
+def load_integrated_lora(ckpt_path, device):
     ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
     cfg = ckpt.get("config", {})
-    model = BFreeGlobalForgeViT(
+    m = BFreeGlobalForgeViT(
         arch=cfg.get("arch", "vit_base_patch14_reg4_dinov2.lvd142m"),
         num_classes=cfg.get("num_classes", 2),
         img_size=cfg.get("img_size", 504),
@@ -838,101 +1089,124 @@ def load_integrated_lora(k2_output_dir, device=DEVICE):
         dcs_tau=cfg.get("dcs_tau", 0.07), lambda_dcs=cfg.get("lambda_dcs", 0.01),
         label_smoothing=cfg.get("label_smoothing", 0.1),
     )
-    model = apply_lora_to_backbone(model, r=cfg.get("lora_rank", 16))
-    report = model.load_state_dict(ckpt["model"], strict=False)
-    print(f"missing={len(report.missing_keys)} unexpected={len(report.unexpected_keys)} "
-          f"epoch={ckpt.get('epoch')} val_bAcc={ckpt.get('val_bacc', 'n/a')}")
-    assert not report.unexpected_keys, f"Unexpected keys: {report.unexpected_keys[:10]}"
-    return model.to(device).eval()
+    from train_lora import apply_lora_to_backbone
+    m = apply_lora_to_backbone(m, r=cfg.get("lora_rank", 16))
+    report = m.load_state_dict(ckpt["model"], strict=False)
+    logger.info(f"Integrated LoRA: missing={len(report.missing_keys)} "
+                f"unexpected={len(report.unexpected_keys)} epoch={ckpt.get('epoch')} "
+                f"val_bAcc={ckpt.get('val_bacc', 'n/a')}")
+    assert not report.unexpected_keys, f"unexpected keys: {report.unexpected_keys[:10]}"
+    return m.to(device).eval()
 
-model_integrated = load_integrated_lora(K2_OUTPUT_DIR)
-print("Model 1 (Integrated LoRA) loaded.")"""),
+DEVICE = "cuda:0" if torch.cuda.is_available() else "cpu"
+model_integrated = load_integrated_lora(K2_CKPT, DEVICE)
+logger.info("Model 1 (Integrated LoRA) loaded.")"""),
 
-    ("code", """# ============ Model 2: B-Free baseline (BFREE_dino2reg4, protocol repo) ============
-import yaml
+    ("md", """### Model 2 — B-Free baseline (`BFREE_dino2reg4`) — nguyên protocol repo
 
-from networks import get_network, load_weights
+`get_network` + `load_weights` + `Wrapper5crops` (tự replicate + 5-crop ở mức patch-embedding); feed full ảnh qua ToTensor+Normalize theo `norm_type` trong config.yaml (giống `main_bfree.py`)."""),
 
-with open(os.path.join(BFREE_WEIGHTS_DIR, "config.yaml")) as f:
-    bfree_cfg = yaml.safe_load(f)
-model_path = os.path.join(BFREE_WEIGHTS_DIR, bfree_cfg["weights_file"])
-print(f"B-Free baseline: arch={bfree_cfg['arch']} norm={bfree_cfg['norm_type']} weights={model_path}")
-model_bfree = load_weights(get_network(bfree_cfg["arch"]), model_path)
-model_bfree = model_bfree.to(DEVICE).eval()
-BFREE_NORM = bfree_cfg["norm_type"]
-print("Model 2 (B-Free baseline) loaded.")"""),
+    ("code", """model_bfree = None
+BFREE_NORM = "resnet"
+if BFREE_WEIGHTS_DIR is None:
+    logger.warning("[SKIP] Model 2 (B-Free baseline): weights input not attached")
+elif not SKIP_MISSING_MODELS:
+    raise FileNotFoundError("B-Free baseline weights required but not attached")
+else:
+    import yaml
 
-    ("code", """# ============ Model 3: GlobalForge released (REM vit_l_a, reassembled 13 parts) ============
-GF_CKPT = "/kaggle/working/checkpoint-best.pth"
+    from networks import get_network, load_weights
 
-parts = sorted(glob.glob(os.path.join(GF_CKPT_PARTS, "checkpoint-best.pth.part_*")))
-print(f"checkpoint parts: {len(parts)} found")
-assert parts, f"No checkpoint parts under {GF_CKPT_PARTS}"
-if not os.path.isfile(GF_CKPT) or os.path.getsize(GF_CKPT) < 1_000_000_000:
-    with open(GF_CKPT, "wb") as out:
-        for p in parts:
-            with open(p, "rb") as f:
-                while True:
-                    chunk = f.read(1024 * 1024 * 64)
-                    if not chunk:
-                        break
-                    out.write(chunk)
-print(f"reassembled checkpoint: {os.path.getsize(GF_CKPT) / 1024**3:.2f} GB")
+    wdir = Path(BFREE_WEIGHTS_DIR)
+    with open(wdir / "config.yaml") as f:
+        bcfg = yaml.safe_load(f)
+    model_bfree = load_weights(get_network(bcfg["arch"]), str(wdir / bcfg["weights_file"]))
+    model_bfree = model_bfree.to(DEVICE).eval()
+    BFREE_NORM = bcfg["norm_type"]
+    logger.info(f"Model 2 (B-Free baseline) loaded: arch={bcfg['arch']} norm={BFREE_NORM}")"""),
 
-GF_WEIGHTS_ROOT = "/kaggle/working/gf_weights"
-os.makedirs(GF_WEIGHTS_ROOT, exist_ok=True)
-vit_la_link = os.path.join(GF_WEIGHTS_ROOT, "vit_l_a")
-if not os.path.exists(vit_la_link):
-    if os.path.isdir(os.path.join(GF_BACKBONE_INPUT, "vit_l_a")):
-        src = os.path.join(GF_BACKBONE_INPUT, "vit_l_a")
-    elif os.path.isfile(os.path.join(GF_BACKBONE_INPUT, "config.json")):
-        src = GF_BACKBONE_INPUT
-    else:
-        raise AssertionError(
-            f"{GF_BACKBONE_INPUT} must contain either a vit_l_a/ subdir or be the HF model dir itself (config.json).")
-    os.symlink(src, vit_la_link)
-os.environ["GLOBALFORGE_WEIGHTS_DIR"] = GF_WEIGHTS_ROOT
+    ("md", """### Model 3 — GlobalForge released (`REM vit_l_a`, reassemble 13 parts)
 
-import models.REM as REM
+Ghép `checkpoint-best.pth.part_*` → `checkpoint-best.pth` (~1.25GB), suy ra lora_rank/use_lib/use_gsr từ state dict, dựng `REM(vit_l_a)` với `GLOBALFORGE_WEIGHTS_DIR` trỏ backbone HF local, load weights."""),
 
+    ("code", """model_gf = None
+if GF_CODE_DIR is None or (GF_CKPT_PARTS_DIR is None and GF_CKPT_ASSEMBLED is None):
+    logger.warning("[SKIP] Model 3 (GlobalForge REM): code/weights/backbone input not attached")
+elif not SKIP_MISSING_MODELS:
+    raise FileNotFoundError("GlobalForge inputs required but not attached")
+else:
+    import sys as _sys
 
-def _infer_lora_rank_from_state_dict(state_dict):
-    for key, value in state_dict.items():
-        if "lora_A.default.weight" in key:
-            return int(value.shape[0])
-    return 16
+    _sys.path.insert(0, str(GF_CODE_DIR))
+    if GF_CKPT_ASSEMBLED is None:
+        GF_CKPT = WORK / "checkpoint-best.pth"
+        if not GF_CKPT.exists() or GF_CKPT.stat().st_size < 1_000_000_000:
+            parts = sorted(glob.glob(str(Path(GF_CKPT_PARTS_DIR) / "checkpoint-best.pth.part_*")))
+            assert parts, f"no checkpoint-best.pth.part_* under {GF_CKPT_PARTS_DIR}"
+            logger.info(f"reassembling {len(parts)} parts ...")
+            with open(GF_CKPT, "wb") as out:
+                for p in parts:
+                    with open(p, "rb") as f:
+                        while True:
+                            chunk = f.read(1024 * 1024 * 64)
+                            if not chunk:
+                                break
+                            out.write(chunk)
+        GF_CKPT_ASSEMBLED = GF_CKPT
+    logger.info(f"checkpoint: {GF_CKPT_ASSEMBLED} "
+                f"({Path(GF_CKPT_ASSEMBLED).stat().st_size/1024**3:.2f} GB)")
 
+    GF_WEIGHTS_ROOT = WORK / "gf_weights"
+    GF_WEIGHTS_ROOT.mkdir(exist_ok=True)
+    vit_link = GF_WEIGHTS_ROOT / "vit_l_a"
+    if not vit_link.exists():
+        if Path(GF_BACKBONE_VITLA, "config.json").is_file() and Path(GF_BACKBONE_VITLA).name == "vit_l_a":
+            src_backbone = Path(GF_BACKBONE_VITLA)
+        elif Path(GF_BACKBONE_VITLA, "vit_l_a", "config.json").is_file():
+            src_backbone = Path(GF_BACKBONE_VITLA) / "vit_l_a"
+        else:
+            src_backbone = None
+        if src_backbone is not None:
+            import shutil as _shutil
+            _shutil.copytree(src_backbone, vit_link)
+            logger.info(f"backbone vit_l_a staged at {vit_link}")
+    os.environ["GLOBALFORGE_WEIGHTS_DIR"] = str(GF_WEIGHTS_ROOT)
 
-def _infer_module_switches_from_state_dict(state_dict):
-    use_lib = any(key.startswith("lib.") for key in state_dict)
-    use_gsr = any(key.startswith("gsr.") for key in state_dict)
-    return use_lib, use_gsr
+    import models.REM as REM
 
-
-def load_released_globalforge(ckpt_path, device=DEVICE):
-    checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    state = checkpoint.get("model", checkpoint)
-    lora_rank = _infer_lora_rank_from_state_dict(state)
-    use_lib, use_gsr = _infer_module_switches_from_state_dict(state)
-    print(f"GlobalForge released: lora_rank={lora_rank}, use_lib={use_lib}, use_gsr={use_gsr}")
-    model = REM.__dict__["REM"](
+    ckpt = torch.load(str(GF_CKPT_ASSEMBLED), map_location="cpu", weights_only=False)
+    state = ckpt.get("model", ckpt)
+    lora_rank = next((int(v.shape[0]) for k, v in state.items()
+                      if "lora_A.default.weight" in k), 16)
+    use_lib = any(k.startswith("lib.") for k in state)
+    use_gsr = any(k.startswith("gsr.") for k in state)
+    logger.info(f"GlobalForge released: lora_rank={lora_rank} use_lib={use_lib} use_gsr={use_gsr}")
+    model_gf = REM.__dict__["REM"](
         mode="vit_l_a", use_lib=use_lib, use_gsr=use_gsr,
         lib_layer=0, gsr_layer=0, lib_kernel=3, lib_tau=0.5,
         gsr_window=3, gsr_mask_prob=1.0,
     )
-    model.load_state_dict(state)
-    return model.to(device).eval()
+    model_gf.load_state_dict(state)
+    model_gf = model_gf.to(DEVICE).eval()
+    logger.info("Model 3 (GlobalForge released) loaded.")"""),
 
-model_gf = load_released_globalforge(GF_CKPT)
-print("Model 3 (GlobalForge released) loaded.")"""),
+    ("md", """### Scoring kernels (protocol code thật của từng model)
 
-    ("md", """### Scoring kernels (theo protocol code thật của từng model)
+- **Model 1**: replicate-pad ảnh < 504 (numpy `edge` — tương đương `replicate_wrap`), 5 crops 504 (center + 4 corners), batch forward, average logits → `l1 − l0`.
+- **Model 2**: feed full ảnh, Wrapper5crops tự xử lý; num_classes=1 → score = logit.
+- **Model 3**: `short256_center` với `eval_resize_short=1296`; PNG round-trip JPEG q100; `Norm(imagenet)` nằm trong model; softmax → log-odds."""),
 
-- **Model 1 (Integrated)**: replicate-pad ảnh < 504 (numpy `edge` pad — tương đương `replicate_wrap` của Wrapper5crops), 5 crops 504 (center + 4 corners), batch forward, **average logits** → score = `l1 − l0`.
-- **Model 2 (B-Free baseline)**: nguyên bản repo — feed full ảnh (ToTensor + Normalize theo config), `Wrapper5crops` tự replicate + 5-crop ở mức patch-embedding, mean 5 views; num_classes=1 → score = logit.
-- **Model 3 (GlobalForge)**: `short256_center` với `eval_resize_short=1296` (paper) — KHÔNG phải resize 224 trực tiếp; PNG round-trip JPEG q100 (giống `compress_image`); `Norm(imagenet)` đã nằm trong `REM_Model.forward`; softmax → log-odds."""),
+    ("code", """import io
 
-    ("code", """IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
+import numpy as np
+from PIL import Image, UnidentifiedImageError
+import torchvision.transforms as T
+import torchvision.transforms.functional as TF
+
+from utils import dmetrics
+from utils.normalization import get_list_norm
+
+IMG_EXT = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tiff"}
 GF_EVAL_RESIZE_SHORT = 1296
 
 
@@ -943,7 +1217,6 @@ def list_images(root, limit=None):
 
 
 def replicate_pad_504(img):
-    \"\"\"Replicate-pad ảnh (PIL) để >= 504x504 (tương đương replicate_wrap của Wrapper5crops).\"\"\"
     w, h = img.size
     if w >= 504 and h >= 504:
         return img
@@ -966,8 +1239,7 @@ def five_crop_boxes(img):
 
 @torch.no_grad()
 def score_image_integrated(model, img_path, device=DEVICE):
-    img = Image.open(img_path).convert("RGB")
-    img = replicate_pad_504(img)
+    img = replicate_pad_504(Image.open(img_path).convert("RGB"))
     views = torch.stack([T.Compose(get_list_norm("resnet"))(img.crop(b)) for b in five_crop_boxes(img)])
     logits = model(views.to(device))["logits"].float().mean(dim=0)
     return float(logits[1] - logits[0])
@@ -1004,12 +1276,12 @@ def score_image_globalforge(model, img_path, device=DEVICE):
     return float(np.log(p / max(1.0 - p, 1e-12)))
 
 
-SCORERS = {
-    "Integrated-LoRA": lambda p: score_image_integrated(model_integrated, p),
-    "B-Free-baseline": lambda p: score_image_bfree(model_bfree, p, norm_type=BFREE_NORM),
-    "GlobalForge-REM": lambda p: score_image_globalforge(model_gf, p),
-}
-print("scorers ready:", list(SCORERS))"""),
+SCORERS = {"Integrated-LoRA": (lambda p: score_image_integrated(model_integrated, p), True)}
+if model_bfree is not None:
+    SCORERS["B-Free-baseline"] = (lambda p: score_image_bfree(model_bfree, p), True)
+if model_gf is not None:
+    SCORERS["GlobalForge-REM"] = (lambda p: score_image_globalforge(model_gf, p), True)
+logger.info(f"scorers ready: {list(SCORERS)}")"""),
 
     ("code", """# ============ Wild subset registry (17 subsets, layout 0_real/1_fake) ============
 
@@ -1042,23 +1314,19 @@ STANDARD_BENCHMARKS = {
     "EvalGEN":     ("EvalGEN/0_real", "EvalGEN/1_fake"),
 }
 
-assert os.path.isdir(DATA_ROOT), f"DATA_ROOT {DATA_ROOT} does not exist — attach 'wild-benchmarks' dataset."
 available = [k for k, (r, f, _) in WILD_SUBSETS.items()
-             if os.path.isdir(os.path.join(DATA_ROOT, r)) and os.path.isdir(os.path.join(DATA_ROOT, f))]
+             if (DATA_ROOT / r).is_dir() and (DATA_ROOT / f).is_dir()]
 missing = [k for k in WILD_SUBSETS if k not in available]
-print(f"wild subsets available: {len(available)}/17")
-if missing:
-    print("[WARN] missing subsets (skipped):", missing)
-assert available, "No wild subset folders found under DATA_ROOT."
-
+logger.info(f"wild subsets available: {len(available)}/17" + (f" (skipped: {missing})" if missing else ""))
+assert available, "no wild subset folders found under DATA_ROOT"
 MAX_IMAGES = None"""),
 
     ("code", """import tqdm
 
 
-def run_subset(model_name, real_dir, fake_dir, data_root, fake_only=False, max_images=None):
-    real_paths = list_images(os.path.join(data_root, real_dir), limit=max_images)
-    fake_paths = list_images(os.path.join(data_root, fake_dir), limit=max_images)
+def run_subset(model_name, scorer, real_dir, fake_dir, fake_only=False, max_images=None):
+    real_paths = list_images(DATA_ROOT / real_dir, limit=max_images)
+    fake_paths = list_images(DATA_ROOT / fake_dir, limit=max_images)
     if fake_only:
         paths, labels = fake_paths, [1] * len(fake_paths)
     else:
@@ -1067,10 +1335,9 @@ def run_subset(model_name, real_dir, fake_dir, data_root, fake_only=False, max_i
     if not paths:
         return None
 
-    scorer = SCORERS[model_name]
     scores, y, n_skipped = [], [], 0
     for path, label in tqdm.tqdm(list(zip(paths, labels)),
-                                 desc=f"{model_name}::{os.path.basename(os.path.dirname(fake_dir))}",
+                                 desc=f"{model_name}::{Path(fake_dir).parent.name}",
                                  leave=False):
         try:
             scores.append(scorer(path))
@@ -1078,7 +1345,7 @@ def run_subset(model_name, real_dir, fake_dir, data_root, fake_only=False, max_i
         except (OSError, UnidentifiedImageError, ValueError):
             n_skipped += 1
     if n_skipped:
-        print(f"  [WARN] {n_skipped} unreadable images skipped")
+        logger.warning(f"  {n_skipped} unreadable images skipped")
     if not scores:
         return None
     scores = np.asarray(scores, dtype=float)
@@ -1101,35 +1368,35 @@ def run_subset(model_name, real_dir, fake_dir, data_root, fake_only=False, max_i
 
 all_results = []
 for subset, (real_dir, fake_dir, fake_only) in WILD_SUBSETS.items():
-    if not (os.path.isdir(os.path.join(DATA_ROOT, real_dir))
-            and os.path.isdir(os.path.join(DATA_ROOT, fake_dir))):
-        print(f"[skip] {subset}: folders missing")
+    if not ((DATA_ROOT / real_dir).is_dir() and (DATA_ROOT / fake_dir).is_dir()):
+        logger.info(f"[skip] {subset}: folders missing")
         continue
-    for model_name in SCORERS:
-        r = run_subset(model_name, real_dir, fake_dir, DATA_ROOT,
+    for model_name, (scorer, _) in SCORERS.items():
+        r = run_subset(model_name, scorer, real_dir, fake_dir,
                        fake_only=fake_only, max_images=MAX_IMAGES)
         if r:
             all_results.append({"Benchmark": subset, **r})
-            print(f"{subset:20s} | {model_name:16s} | bAcc={r['bAcc']:6.2f} AUC={r['AUC']:.4f} n={r['n_images']}",
-                  flush=True)
+            logger.info(f"{subset:20s} | {model_name:16s} | bAcc={r['bAcc']:6.2f} "
+                        f"AUC={r['AUC']:.4f} n={r['n_images']}")
+
+import pandas as pd
 
 wild_df = pd.DataFrame(all_results)
 display(wild_df)"""),
 
-    ("code", """# ============ Standard benchmarks (optional — skip nếu chưa attach) ============
+    ("code", """# ============ Standard benchmarks (optional - skip neu chua attach) ============
 std_results = []
 for bench, (real_dir, fake_dir) in STANDARD_BENCHMARKS.items():
-    if not (os.path.isdir(os.path.join(DATA_ROOT, real_dir))
-            and os.path.isdir(os.path.join(DATA_ROOT, fake_dir))):
-        print(f"[skip] {bench}: folders missing under {DATA_ROOT}")
+    if not ((DATA_ROOT / real_dir).is_dir() and (DATA_ROOT / fake_dir).is_dir()):
+        logger.info(f"[skip] {bench}: folders missing under {DATA_ROOT}")
         continue
-    for model_name in SCORERS:
-        r = run_subset(model_name, real_dir, fake_dir, DATA_ROOT,
+    for model_name, (scorer, _) in SCORERS.items():
+        r = run_subset(model_name, scorer, real_dir, fake_dir,
                        fake_only=False, max_images=MAX_IMAGES)
         if r:
             std_results.append({"Benchmark": bench, **r})
-            print(f"{bench:14s} | {model_name:16s} | bAcc={r['bAcc']:6.2f} AUC={r['AUC']:.4f} n={r['n_images']}",
-                  flush=True)
+            logger.info(f"{bench:14s} | {model_name:16s} | bAcc={r['bAcc']:6.2f} "
+                        f"AUC={r['AUC']:.4f} n={r['n_images']}")
 
 std_df = pd.DataFrame(std_results)
 if len(std_df):
@@ -1146,7 +1413,7 @@ def get_parent_dataset_key(result_key):
 
 
 def combine_parent_dataset_average(df, metric="bAcc"):
-    \"\"\"Trung bình từng parent group, rồi trung bình các group (giống eval_in_the_wild.py).\"\"\"
+    '''Trung binh tung parent group, roi trung binh cac group (giong eval_in_the_wild.py).'''
     out = {}
     for model in df["Model"].unique():
         groups = {}
@@ -1157,14 +1424,14 @@ def combine_parent_dataset_average(df, metric="bAcc"):
 
 
 results_df = pd.concat([wild_df, std_df], ignore_index=True)
-results_df.to_csv("/kaggle/working/eval_results.csv", index=False)
+results_df.to_csv(WORK / "eval_results.csv", index=False)
 
 wild_only = results_df[results_df["Benchmark"].isin(WILD_SUBSETS)]
 avg_rows = [{"Model": m, "Benchmark": "Avg B.Acc (wild, parent-avg)", "bAcc": v, "fake_only": False}
             for m, v in combine_parent_dataset_average(wild_only).items()]
 results_df = pd.concat([results_df, pd.DataFrame(avg_rows)], ignore_index=True)
-results_df.to_csv("/kaggle/working/eval_results.csv", index=False)
-print("saved /kaggle/working/eval_results.csv")
+results_df.to_csv(WORK / "eval_results.csv", index=False)
+logger.info("saved /kaggle/working/eval_results.csv")
 display(results_df.pivot_table(index="Benchmark", columns="Model", values="bAcc", dropna=False))"""),
 
     ("code", """# ============ Visualization: bar chart + heatmap ============
@@ -1179,28 +1446,27 @@ piv_bacc = plot_df.pivot_table(index="Benchmark", columns="Model", values="bAcc"
 fig, ax = plt.subplots(figsize=(13, max(6, 0.35 * len(piv_bacc))), dpi=130)
 piv_bacc.plot(kind="barh", ax=ax)
 ax.set_xlabel("bAcc (%)")
-ax.set_title("Balanced Accuracy per subset × model")
+ax.set_title("Balanced Accuracy per subset x model")
 ax.legend(loc="lower right")
 fig.tight_layout()
-fig.savefig("/kaggle/working/eval_bacc_bar.png")
+fig.savefig(WORK / "eval_bacc_bar.png")
 
 fig, ax = plt.subplots(figsize=(9, max(6, 0.35 * len(piv_bacc))), dpi=130)
 sns.heatmap(piv_bacc, annot=True, fmt=".1f", cmap="RdYlGn", vmin=50, vmax=100, ax=ax)
-ax.set_title("bAcc heatmap (model × subset)")
+ax.set_title("bAcc heatmap (model x subset)")
 fig.tight_layout()
-fig.savefig("/kaggle/working/eval_bacc_heatmap.png")
-print("saved eval_bacc_bar.png + eval_bacc_heatmap.png")"""),
+fig.savefig(WORK / "eval_bacc_heatmap.png")
+logger.info("saved eval_bacc_bar.png + eval_bacc_heatmap.png")"""),
 
     ("md", """## Evaluation Complete (K3)
 
 Outputs trong `/kaggle/working/`:
 - `eval_results.csv` — model × subset × {AUC, bAcc, NLL, ECE, Pd10, EER} + hàng `Avg B.Acc (wild, parent-avg)`
-- `eval_bacc_bar.png` — bar chart bAcc per subset × model
-- `eval_bacc_heatmap.png` — heatmap model × subset
+- `eval_bacc_bar.png` / `eval_bacc_heatmap.png`
 
 **K3 checklist:** notebook chạy được · eval results CSV + heatmap + bar chart.
 
-**Tiếp theo:** K4 (loss interaction analysis) — dùng `train_log.csv` từ K2 với `eval/analyze_loss.py` của repo (Pearson/Spearman correlation CE vs DCS + loss dynamics plot)."""),
+**K4 (post-training analysis):** dùng `train_log.csv` từ K2 — Pearson/Spearman CE vs DCS + loss dynamics (tương đương `eval/analyze_loss.py` của repo), cập nhật vào báo cáo Phase 8."""),
 ]
 
 # =====================================================================
