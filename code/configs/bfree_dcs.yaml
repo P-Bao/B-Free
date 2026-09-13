@@ -24,6 +24,15 @@ loss:
 #     + RandomGaussianBlur(kernel_size=7, sigma=(0.5,1.5), p=0.8)
 #     + ColorDistortion(level=3, p=0.8)
 # (KHÔNG dùng inpainted++ của B-Free — repo B-Free không có code, chỉ mô tả chữ.)
+#
+# Bổ sung resize/noise (KHÔNG có trong pipeline GlobalForge gốc ở trên): đối chiếu với
+# eval RealDeg-Bench-style (notebook 02) cho thấy đây là 2 toán tử DUY NHẤT hoàn toàn
+# vắng mặt lúc train, và cũng chính xác là 2 toán tử tệ nhất khi test
+# (bAcc resize=0.6464, noise=0.6402 — so với brightness/contrast/saturation ~0.999 vì
+# ColorJitter hiện có đã đủ mạnh để phủ 3 toán tử đó). Compound degradation (nhiều toán
+# tử nối tiếp) rớt rất nặng (0.5715 ở 5 bước) phần lớn do gần như luôn dính ít nhất 1
+# trong 2 toán tử còn thiếu này. jpeg_quality/blur_sigma/color_* GIỮ NGUYÊN không đổi
+# so với recipe gốc của GlobalForge.
 degradation:
   jpeg_quality_min: 20
   jpeg_quality_max: 80
@@ -33,3 +42,9 @@ degradation:
   blur_prob: 0.8
   color_level: 3
   color_prob: 0.8
+  resize_scale_min: 0.2      # thu nhỏ còn 20%-90% kích thước gốc rồi phóng lại
+  resize_scale_max: 0.9
+  resize_prob: 0.5
+  noise_std_min: 0.02        # Gaussian noise std trên ảnh chuẩn hoá [0,1]
+  noise_std_max: 0.1
+  noise_prob: 0.5
