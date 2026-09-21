@@ -55,4 +55,5 @@ def build_degradation_kwargs(cfg: dict) -> dict:
         "noise_std_min": d.get("noise_std_min", 0.02),
         "noise_std_max": d.get("noise_std_max", 0.1),
         "noise_prob": d.get("noise_prob", 0.5),
+        "single_op_prob": d.get("single_op_prob", 0.4),
     }
