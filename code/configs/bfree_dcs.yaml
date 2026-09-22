@@ -48,3 +48,9 @@ degradation:
   noise_std_min: 0.02        # Gaussian noise std trên ảnh chuẩn hoá [0,1]
   noise_std_max: 0.1
   noise_prob: 0.5
+  # Bổ sung lần 2: 40% batch dùng đúng 1 toán tử ngẫu nhiên trên ảnh sạch (thay vì luôn
+  # xếp chồng JPEG->Blur->Resize->Noise->Color) — sau lần bổ sung resize/noise ở trên,
+  # noise cải thiện rõ (bAcc 0.6402->0.7357) nhưng resize gần như không đổi
+  # (0.6464->0.6510) vì trong nhánh compound resize luôn bị áp SAU JPEG(p=1.0), DCS
+  # chưa từng thấy "resize trên ảnh sạch" giống giao thức single-operator dùng để test.
+  single_op_prob: 0.4

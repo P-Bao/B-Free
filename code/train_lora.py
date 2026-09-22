@@ -10,7 +10,7 @@ from peft import LoraConfig, get_peft_model
 
 from configs.loader import load_config, build_model_kwargs
 from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
-from datasets.bfree_dataset import BFreeDataset
+from bfree_datasets.bfree_dataset import BFreeDataset
 from train_full_ft import train_one_epoch, evaluate
 
 

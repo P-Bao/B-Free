@@ -10,7 +10,7 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 
 from configs.loader import load_config, build_model_kwargs
 from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
-from datasets.bfree_dataset import BFreeDataset
+from bfree_datasets.bfree_dataset import BFreeDataset
 from utils.dmetrics import balanced_accuracy_score, roc_auc_score
 
 

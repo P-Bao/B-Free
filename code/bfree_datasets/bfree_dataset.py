@@ -16,18 +16,29 @@ from utils.normalization import get_list_norm
 
 class DegradationPipeline:
     """Pipeline suy hao mô phỏng GlobalForge (JPEG + Blur + Color Distortion), bổ sung
-    thêm Resize + Gaussian Noise.
+    thêm Resize + Gaussian Noise, và nhánh single-operator.
 
-    Lý do bổ sung: JPEG/Blur/Color là nguyên bản từ pipeline GlobalForge
+    Lý do bổ sung Resize/Noise: JPEG/Blur/Color là nguyên bản từ pipeline GlobalForge
     (datasets_real.py:378-383) — KHÔNG đổi mặc định của 3 toán tử này để giữ đúng
-    recipe gốc của paper. Resize và Noise KHÔNG có trong pipeline gốc, và đối chiếu với
-    eval RealDeg-Bench-style (notebook 02) cho thấy đây chính xác là 2 toán tử tệ nhất
-    (bAcc 0.6464 / 0.6402, so với brightness/contrast/saturation ~0.999 vì ColorJitter
-    hiện có đã đủ mạnh) — khớp với việc L_DCS chưa từng thấy 2 phép biến đổi này lúc
-    train nên model không học được bất biến với chúng. Compound degradation (nhiều toán
-    tử nối tiếp) vì vậy cũng rớt rất nặng (0.5715 ở 5 bước) do gần như luôn dính ít nhất
-    1 trong 2 toán tử còn thiếu này.
+    recipe gốc của paper. Resize và Noise KHÔNG có trong pipeline gốc; đối chiếu với
+    eval RealDeg-Bench-style (notebook 02) ban đầu cho thấy đây chính xác là 2 toán tử
+    tệ nhất (bAcc 0.6464 / 0.6402).
+
+    Lý do bổ sung nhánh single-operator: sau khi thêm Resize/Noise vào nhánh compound
+    (luôn xếp chồng JPEG -> Blur -> Resize -> Noise -> Color), noise cải thiện rõ rệt
+    (bAcc 0.6402 -> 0.7357) nhưng resize gần như không đổi (0.6464 -> 0.6510). Nguyên
+    nhân nghi ngờ: trong nhánh compound, resize luôn được áp SAU JPEG (p=1.0) và
+    thường sau cả Blur (p=0.8) — tức DCS gần như không bao giờ thấy "resize trên ảnh
+    sạch", trong khi phép test single-operator của RealDeg-Bench áp đúng 1 toán tử lên
+    ảnh sạch. Với noise (phép CỘNG THÊM nhiễu), bất biến học được trong bối cảnh xếp
+    chồng vẫn chuyển giao tốt sang trường hợp đơn lẻ; với resize (phép PHÁ HUỶ thông
+    tin qua downscale), kiểu mất thông tin resize-sau-JPEG khác bản chất với
+    resize-trên-ảnh-sạch nên không chuyển giao tốt.  cho phép một phần
+    batch được suy giảm bằng ĐÚNG 1 toán tử ngẫu nhiên trên ảnh sạch, khớp sát hơn với
+    giao thức single-operator dùng để đánh giá.
     """
+
+    _OPS = ("jpeg", "blur", "resize", "noise", "color")
 
     def __init__(
         self,
@@ -44,6 +55,7 @@ class DegradationPipeline:
         noise_std_min: float = 0.02,
         noise_std_max: float = 0.1,
         noise_prob: float = 0.5,
+        single_op_prob: float = 0.4,
     ):
         self.jpeg_min = jpeg_quality_min
         self.jpeg_max = jpeg_quality_max
@@ -58,55 +70,75 @@ class DegradationPipeline:
         self.noise_std_min = noise_std_min
         self.noise_std_max = noise_std_max
         self.noise_prob = noise_prob
+        self.single_op_prob = single_op_prob
         self.color_jitter = transforms.ColorJitter(
             brightness=0.4, contrast=0.4, saturation=0.4, hue=0.06
         )
 
-    def _apply_jpeg(self, img: Image.Image) -> Image.Image:
+    # --- các phép biến đổi "lõi", LUÔN áp dụng khi được gọi (không tự kiểm tra xác
+    # suất) - dùng chung cho cả nhánh compound (qua wrapper _apply_*, có prob riêng)
+    # và nhánh single-operator (gọi thẳng, vì việc CHỌN toán tử này đã là quyết định
+    # áp dụng nó, không cần roll xác suất thêm lần 2).
+    def _do_jpeg(self, img: Image.Image) -> Image.Image:
         quality = random.randint(self.jpeg_min, self.jpeg_max)
         buffer = io.BytesIO()
         img.save(buffer, format="JPEG", quality=quality)
         buffer.seek(0)
         return Image.open(buffer).convert("RGB")
 
-    def _apply_blur(self, img: Image.Image) -> Image.Image:
-        if random.random() < self.blur_prob:
-            sigma = random.uniform(self.blur_sigma_min, self.blur_sigma_max)
-            return img.filter(ImageFilter.GaussianBlur(radius=sigma))
-        return img
+    def _do_blur(self, img: Image.Image) -> Image.Image:
+        sigma = random.uniform(self.blur_sigma_min, self.blur_sigma_max)
+        return img.filter(ImageFilter.GaussianBlur(radius=sigma))
 
-    def _apply_resize(self, img: Image.Image) -> Image.Image:
+    def _do_resize(self, img: Image.Image) -> Image.Image:
         """Thu nhỏ rồi phóng to lại về đúng kích thước gốc — mô phỏng ảnh bị resize
         xuống độ phân giải thấp rồi phóng lại (thường gặp khi ảnh đi qua nhiều lần
         chia sẻ/re-upload). KHÔNG có trong pipeline GlobalForge gốc."""
-        if random.random() < self.resize_prob:
-            w, h = img.size
-            scale = random.uniform(self.resize_scale_min, self.resize_scale_max)
-            small = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.BICUBIC)
-            return small.resize((w, h), Image.BICUBIC)
-        return img
+        w, h = img.size
+        scale = random.uniform(self.resize_scale_min, self.resize_scale_max)
+        small = img.resize((max(1, int(w * scale)), max(1, int(h * scale))), Image.BICUBIC)
+        return small.resize((w, h), Image.BICUBIC)
 
-    def _apply_noise(self, img: Image.Image) -> Image.Image:
+    def _do_noise(self, img: Image.Image) -> Image.Image:
         """Gaussian noise cộng vào ảnh (chuẩn hoá [0,1] trước khi cộng nhiễu, clip lại
         sau đó). KHÔNG có trong pipeline GlobalForge gốc."""
-        if random.random() < self.noise_prob:
-            std = random.uniform(self.noise_std_min, self.noise_std_max)
-            arr = np.asarray(img).astype(np.float32) / 255.0
-            arr = arr + np.random.normal(0.0, std, arr.shape)
-            arr = np.clip(arr, 0.0, 1.0)
-            return Image.fromarray((arr * 255).astype(np.uint8))
-        return img
+        std = random.uniform(self.noise_std_min, self.noise_std_max)
+        arr = np.asarray(img).astype(np.float32) / 255.0
+        arr = arr + np.random.normal(0.0, std, arr.shape)
+        arr = np.clip(arr, 0.0, 1.0)
+        return Image.fromarray((arr * 255).astype(np.uint8))
+
+    def _do_color(self, img: Image.Image) -> Image.Image:
+        return self.color_jitter(img)
+
+    # --- wrapper có xác suất riêng, dùng cho nhánh compound (giữ đúng hành vi cũ) ---
+    def _apply_jpeg(self, img: Image.Image) -> Image.Image:
+        return self._do_jpeg(img)  # p=1.0 trong pipeline gốc, luôn áp dụng
+
+    def _apply_blur(self, img: Image.Image) -> Image.Image:
+        return self._do_blur(img) if random.random() < self.blur_prob else img
+
+    def _apply_resize(self, img: Image.Image) -> Image.Image:
+        return self._do_resize(img) if random.random() < self.resize_prob else img
+
+    def _apply_noise(self, img: Image.Image) -> Image.Image:
+        return self._do_noise(img) if random.random() < self.noise_prob else img
 
     def _apply_color(self, img: Image.Image) -> Image.Image:
-        if random.random() < self.color_prob:
-            return self.color_jitter(img)
-        return img
+        return self._do_color(img) if random.random() < self.color_prob else img
+
+    def _apply_single_op(self, img: Image.Image) -> Image.Image:
+        op = random.choice(self._OPS)
+        return {"jpeg": self._do_jpeg, "blur": self._do_blur, "resize": self._do_resize,
+                "noise": self._do_noise, "color": self._do_color}[op](img)
 
     def __call__(self, img: Image.Image) -> Image.Image:
-        # Thứ tự: JPEG -> Blur -> Resize -> Noise -> Color.
-        # Giữ nguyên JPEG/Blur ở đầu và Color ở cuối như pipeline gốc; Resize/Noise (mới
-        # thêm) chèn xen giữa Blur và Color vì đây cũng là các phép biến dạng không gian/
-        # tần số như Blur, hợp lý đứng cùng nhóm trước bước chỉnh màu toàn cục.
+        if random.random() < self.single_op_prob:
+            # Nhánh single-operator: đúng 1 toán tử ngẫu nhiên trên ảnh sạch, khớp sát
+            # giao thức single-operator dùng để đánh giá (xem docstring lớp).
+            return self._apply_single_op(img)
+        # Nhánh compound (mặc định cũ): JPEG -> Blur -> Resize -> Noise -> Color, mô
+        # phỏng ảnh bị xử lý qua nhiều bước liên tiếp (nén, resize, chia sẻ mạng xã hội).
         img = self._apply_jpeg(img)
         img = self._apply_blur(img)
         img = self._apply_resize(img)
