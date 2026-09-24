@@ -6,8 +6,8 @@ notebook giữ được dưới 1 MB. Eval riêng (per-variant / AIGB held-out /
 RealDeg-Bench) nằm ở notebook eval — script này CHỈ train (main val giữ lại vì
 là metric chọn best checkpoint).
 
-Chạy:
-    bash scripts/run_train_kaggle.sh \
+Chạy (từ thư mục code/, hoặc notebook bash cell — env offline do caller set):
+    accelerate launch --num_processes 1 --mixed_precision bf16 train_lora.py \
         --train_data_root /kaggle/input/datasets/... \
         --dinov2_sd /kaggle/input/.../model.safetensors \
         --ai_genbench_dir /kaggle/input/datasets/...   # optional
