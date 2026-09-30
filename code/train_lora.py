@@ -39,11 +39,13 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
+from bfree_datasets.multi_severity import MultiSeverityDegrader, validate_config as validate_ms_config
 from utils.normalization import get_list_norm
 from utils.dmetrics import balanced_accuracy_score, roc_auc_score
 
 logger = logging.getLogger("bfree")
 CFG = {}  # điền trong parse_args/main, đọc từ các module-level helpers
+_MS_DEGRADER = None  # MultiSeverityDegrader khi multi_severity.enabled; None = đường v2 mặc định
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -58,6 +60,22 @@ PRIORITY_GENERATORS = [
 # ============================================================
 # CLI
 # ============================================================
+
+def load_multi_severity_config(config_path):
+    """Đọc CHỈ section ``multi_severity`` của YAML (các hyperparameter khác vẫn theo CLI).
+    Thiếu section => tắt (đường v2 mặc định)."""
+    import yaml
+    path = Path(config_path)
+    if not path.is_absolute() and not path.exists():
+        path = Path(__file__).resolve().parent / path
+    if not path.is_file():
+        raise FileNotFoundError(f"--config không tồn tại: {config_path}")
+    with open(path, "r", encoding="utf-8") as f:
+        ms = (yaml.safe_load(f) or {}).get("multi_severity") or {"enabled": False}
+    if ms.get("enabled"):
+        validate_ms_config(ms)
+    return ms
+
 
 def parse_args():
     p = argparse.ArgumentParser(description="K2 LoRA training (train-only, accelerate)")
@@ -103,6 +121,9 @@ def parse_args():
     p.add_argument("--aigenbench_seed", type=int, default=42)
     p.add_argument("--num_workers", type=int, default=4)
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--select", choices=["last", "best"], default="last",
+                   help="checkpoint dùng cho eval: last-epoch (mặc định, không chọn theo val bão hòa) "
+                        "hay best-val. Cả hai file vẫn được lưu; lựa chọn ghi vào selected_ckpt.txt")
     args = p.parse_args()
 
     CFG.update(vars(args))
@@ -110,6 +131,7 @@ def parse_args():
     CFG["degrade_round_probs"] = [
         float(x) for x in CFG["degrade_round_probs"].split(",") if x.strip()
     ]
+    CFG["multi_severity"] = load_multi_severity_config(CFG["config"])
     for path_key in ("train_data_root", "dinov2_sd", "ai_genbench_dir"):
         if CFG[path_key] is not None and not Path(CFG[path_key]).exists():
             raise FileNotFoundError(
@@ -190,6 +212,21 @@ def realistic_lifecycle_degrade(img, rng):
         weights=CFG["degrade_round_probs"],
     )[0]
     return apply_compound(img, n_rounds, rng)
+
+
+def degraded_view(img, normalize):
+    """Default (multi_severity off): 1 lifecycle-degraded view, normalized tensor (3,H,W) —
+    đúng như v2. On: K view multi-severity, stacked (K,3,H,W)."""
+    if _MS_DEGRADER is None:
+        return normalize(realistic_lifecycle_degrade(img, random))
+    return torch.stack([normalize(v) for v in _MS_DEGRADER(img)])
+
+
+def split_views(img_deg):
+    """Batch (B,K,3,H,W) -> list K tensors (B,3,H,W); tensor 4-D giữ nguyên (đường v2)."""
+    if img_deg.dim() == 5:
+        return [img_deg[:, k] for k in range(img_deg.size(1))]
+    return img_deg
 
 
 # ============================================================
@@ -323,8 +360,7 @@ class PairDataset(Dataset):
                 img = TF.hflip(img)
         else:
             img = TF.center_crop(img, (self.img_size, self.img_size))
-        img_deg = realistic_lifecycle_degrade(img, random)
-        return self.normalize(img), self.normalize(img_deg), label
+        return self.normalize(img), degraded_view(img, self.normalize), label
 
 
 def _is_extra_holdout(path):
@@ -365,8 +401,7 @@ class ExtraTrainDataset(Dataset):
         img = TF.crop(img, t, l, h, w)
         if random.random() > 0.5:
             img = TF.hflip(img)
-        img_deg = realistic_lifecycle_degrade(img, random)
-        return self.normalize(img), self.normalize(img_deg), self.label
+        return self.normalize(img), degraded_view(img, self.normalize), self.label
 
 
 # ============================================================
@@ -515,8 +550,7 @@ class ExtraArrowTrainDataset(Dataset):
                 img = TF.hflip(img)
         else:
             img = TF.center_crop(img, (self.img_size, self.img_size))
-        img_deg = realistic_lifecycle_degrade(img, random)
-        return self.normalize(img), self.normalize(img_deg), self.label
+        return self.normalize(img), degraded_view(img, self.normalize), self.label
 
 
 # ============================================================
@@ -609,10 +643,12 @@ def try_batch(model, bs, img_size, device):
     torch.cuda.reset_peak_memory_stats()
     try:
         x1 = torch.randn(bs, 3, img_size, img_size, device=device)
-        x2 = torch.randn(bs, 3, img_size, img_size, device=device)
+        n_views = CFG["multi_severity"]["views_per_step"] if _MS_DEGRADER is not None else 0
+        x2 = ([torch.randn(bs, 3, img_size, img_size, device=device) for _ in range(n_views)]
+              if n_views else torch.randn(bs, 3, img_size, img_size, device=device))
         y = torch.randint(0, 2, (bs,), device=device)
         with _autocast():
-            total, _, _ = model.compute_loss(x1, x2, y)
+            total, _, _ = model.compute_loss(x1, x2, y, view_weights=CFG.get("ms_view_weights"))
         total.backward()
         del x1, x2, y, total
         return True
@@ -645,6 +681,7 @@ def find_max_batch_size(model, img_size, device, hard_cap):
 
 
 def main():
+    global _MS_DEGRADER
     args = parse_args()
     output_dir = Path(CFG["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -660,6 +697,19 @@ def main():
     np.random.seed(CFG["seed"])
     torch.manual_seed(CFG["seed"])
     torch.cuda.manual_seed_all(CFG["seed"])
+
+    ms = CFG["multi_severity"]
+    CFG["ms_view_weights"] = None
+    if ms.get("enabled"):
+        _MS_DEGRADER = MultiSeverityDegrader.from_config(ms, random)  # global `random`, seeded per worker
+        # weights gắn với bin chỉ khi mỗi step dùng đủ mọi bin; ngược lại (A2) trung bình đều
+        if int(ms["views_per_step"]) == len(ms["levels"]):
+            CFG["ms_view_weights"] = [float(w) for w in ms["weights"]]
+        logger.info(f"[multi_severity] ON: compose={ms['compose']} views_per_step={ms['views_per_step']} "
+                    f"weights={CFG['ms_view_weights'] or 'uniform'} levels={len(ms['levels'])}")
+    else:
+        logger.info("[multi_severity] OFF -> v2 single lifecycle-degraded view")
+    n_ms = int(ms["views_per_step"]) if ms.get("enabled") else 0
 
     train_root = Path(CFG["train_data_root"])
     real_dir = unwrap_dir(train_root / "COCO_real_512")
@@ -799,11 +849,15 @@ def main():
                     leave=False, disable=not accelerator.is_main_process)
         for step, (img_clean, img_deg, labels) in enumerate(pbar):
             img_clean = img_clean.to(device, non_blocking=True)
-            img_deg = img_deg.to(device, non_blocking=True)
+            img_deg = split_views(img_deg.to(device, non_blocking=True))
             labels = labels.to(device, non_blocking=True)
             optimizer.zero_grad(set_to_none=True)
             with _autocast():
-                total, ce, dcs = model.compute_loss(img_clean, img_deg, labels)
+                total, ce, dcs = model.compute_loss(img_clean, img_deg, labels,
+                                                    view_weights=CFG["ms_view_weights"])
+            terms = getattr(accelerator.unwrap_model(model), "last_dcs_terms", {})
+            for name, t in terms.items():
+                agg[name] = agg.get(name, 0.0) + float(t) * labels.size(0)
             accelerator.backward(total)
             accelerator.clip_grad_norm_(
                 (p for p in model.parameters() if p.requires_grad),
@@ -827,7 +881,8 @@ def main():
                 ce=f"{agg['ce']/max(agg['n'],1):.4f}",
                 dcs=f"{agg['dcs']/max(agg['n'],1):.4f}",
                 lr=f"{optimizer.param_groups[0]['lr']:.1e}")
-        return {k: agg[k] / max(agg["n"], 1) for k in ("total", "ce", "dcs")}
+        keys = ["total", "ce", "dcs"] + [f"dcs_k{i}" for i in range(1, n_ms + 1)]
+        return {k: agg[k] / max(agg["n"], 1) for k in keys}
 
     @torch.no_grad()
     def run_val():
@@ -836,10 +891,11 @@ def main():
         scores, labels_all = [], []
         for img_clean, img_deg, labels in val_loader:
             img_clean = img_clean.to(device, non_blocking=True)
-            img_deg = img_deg.to(device, non_blocking=True)
+            img_deg = split_views(img_deg.to(device, non_blocking=True))
             labels = labels.to(device, non_blocking=True)
             with _autocast():
-                total, _, _ = model.compute_loss(img_clean, img_deg, labels)
+                total, _, _ = model.compute_loss(img_clean, img_deg, labels,
+                                                 view_weights=CFG["ms_view_weights"])
                 out = model(img_clean)
             logits = out["logits"].float()
             scores.append((logits[:, 1] - logits[:, 0]).cpu())
@@ -866,7 +922,8 @@ def main():
     # ---- main loop ----
     log_csv = output_dir / "train_log.csv"
     with open(log_csv, "w", encoding="utf-8") as f:
-        f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc\n")
+        f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc"
+                + "".join(f",dcs_k{i}" for i in range(1, n_ms + 1)) + "\n")
 
     train_log = []
     best_bacc = 0.0
@@ -878,12 +935,14 @@ def main():
                      f"val loss={va['val_loss']:.4f} auc={va['val_auc']:.4f} "
                      f"bacc={va['val_bacc']:.4f}")
         train_log.append({"epoch": epoch, "train_loss": tr["total"],
-                          "train_ce": tr["ce"], "train_dcs": tr["dcs"], **va})
+                          "train_ce": tr["ce"], "train_dcs": tr["dcs"], **va,
+                          **{k: v for k, v in tr.items() if k.startswith("dcs_k")}})
         if accelerator.is_main_process:
             with open(log_csv, "a", encoding="utf-8") as f:
                 f.write(f"{epoch},{tr['total']:.4f},{tr['ce']:.4f},{tr['dcs']:.4f},"
                         f"{va['val_loss']:.4f},{va['val_auc']:.4f},"
-                        f"{va['val_bacc']:.4f}\n")
+                        f"{va['val_bacc']:.4f}"
+                        + "".join(f",{tr[f'dcs_k{i}']:.4f}" for i in range(1, n_ms + 1)) + "\n")
             if va["val_bacc"] > best_bacc:
                 best_bacc = va["val_bacc"]
                 save_ckpt(output_dir / "bfree_globalforge_lora_r16_best.pth",
@@ -896,6 +955,10 @@ def main():
     if accelerator.is_main_process:
         save_ckpt(output_dir / "bfree_globalforge_lora_r16.pth",
                   CFG["epochs"], train_log)
+        selected = ("bfree_globalforge_lora_r16.pth" if CFG["select"] == "last"
+                    else "bfree_globalforge_lora_r16_best.pth")
+        (output_dir / "selected_ckpt.txt").write_text(selected + "\n")
+        logger.info(f"selected checkpoint for eval (--select {CFG['select']}): {selected}")
 
         # training curves (matplotlib Agg — không cần display)
         import matplotlib
