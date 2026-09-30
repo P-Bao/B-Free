@@ -702,7 +702,7 @@ def main():
     CFG["ms_view_weights"] = None
     if ms.get("enabled"):
         _MS_DEGRADER = MultiSeverityDegrader.from_config(ms, random)  # global `random`, seeded per worker
-        # weights gắn với bin chỉ khi mỗi step dùng đủ mọi bin; ngược lại (A2) trung bình đều
+        # weights gắn với bin chỉ khi mỗi step dùng đủ mọi bin; ngược lại trung bình đều
         if int(ms["views_per_step"]) == len(ms["levels"]):
             CFG["ms_view_weights"] = [float(w) for w in ms["weights"]]
         logger.info(f"[multi_severity] ON: compose={ms['compose']} views_per_step={ms['views_per_step']} "

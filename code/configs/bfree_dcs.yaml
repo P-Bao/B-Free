@@ -61,7 +61,7 @@ degradation:
 multi_severity:
   enabled: false
   compose: single_op        # single_op: 1 random op per view | compound: jpeg->blur->resize->noise at that level
-  views_per_step: 4         # 4 = all bins per step (A1); 1 = one random bin per sample (A2)
+  views_per_step: 4         # = len(levels): every bin each step (fixed order, per-bin weights); fewer: random subset of bins per image
   weights: [1, 1, 1, 1]     # per-bin weight in the DCS average (used when views_per_step == number of levels)
   levels:
     - {jpeg: [85, 95], blur_sigma: [0.5, 1.0], resize: [0.75, 0.90], noise_std255: [2, 5]}

@@ -14,7 +14,7 @@ compose:
 
 views_per_step:
   == len(levels): view k is bin k (fixed order, so per-bin logging is meaningful).
-  <  len(levels): bins are sampled without replacement per image (A2 ablation: 1 bin).
+  <  len(levels): bins are sampled without replacement per image (weights then uniform).
 """
 
 import io
