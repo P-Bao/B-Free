@@ -25,7 +25,7 @@ from timm.models.vision_transformer import VisionTransformer
 
 from modules.lib_adapter import LIBAdapter
 from modules.gsr_adapter import GSRAdapter
-from modules.dcs_loss import DCSLoss, info_nce_loss
+from modules.dcs_loss import DCSLoss, info_nce_loss, multi_severity_dcs
 
 
 class BFreeGlobalForgeViT(nn.Module):
@@ -77,6 +77,8 @@ class BFreeGlobalForgeViT(nn.Module):
         # Loss
         self.dcs = DCSLoss(tau=dcs_tau, weight=lambda_dcs) if use_dcs else None
         self.ce = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+        # Per-view DCS terms of the last compute_loss (multi-severity mode), detached, for logging.
+        self.last_dcs_terms: Dict[str, torch.Tensor] = {}
 
     # ---- feature extraction -------------------------------------------------
 
@@ -115,22 +117,35 @@ class BFreeGlobalForgeViT(nn.Module):
     def compute_loss(
         self,
         images_clean: torch.Tensor,
-        images_degraded: torch.Tensor,
+        images_degraded,
         labels: torch.Tensor,
+        view_weights=None,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """Trả về (total_loss, ce_loss, dcs_loss) — tách bạch cho logging Phase 8.
 
         CE tính trên logits của view clean (theo convention GlobalForge engine_finetune.py:130).
         L_DCS tính giữa cls_clean và cls_degraded (symmetric InfoNCE).
         total = CE + lambda_dcs * L_DCS.
+
+        ``images_degraded``: Tensor (đường mặc định, không đổi so với v2) hoặc list K Tensor
+        (multi-severity). Với list, dcs_loss = trung bình có trọng số (``view_weights``,
+        mặc định đều) của K symmetric InfoNCE; từng term detached ghi vào
+        ``self.last_dcs_terms`` = {"dcs_k1": ..., ...}. Hợp đồng 3 scalar giữ nguyên.
         """
         out_clean = self.forward(images_clean)
         ce_loss = self.ce(out_clean["logits"], labels)
 
         dcs_loss = out_clean["logits"].new_zeros(())
+        self.last_dcs_terms = {}
         if self.use_dcs and self.dcs is not None:
-            out_deg = self.forward(images_degraded)
-            dcs_loss = info_nce_loss(out_clean["cls"], out_deg["cls"], tau=self.dcs.tau)
+            if isinstance(images_degraded, (list, tuple)):
+                cls_views = [self.forward(v)["cls"] for v in images_degraded]
+                dcs_loss, terms = multi_severity_dcs(
+                    out_clean["cls"], cls_views, weights=view_weights, tau=self.dcs.tau)
+                self.last_dcs_terms = {f"dcs_k{i + 1}": t for i, t in enumerate(terms)}
+            else:
+                out_deg = self.forward(images_degraded)
+                dcs_loss = info_nce_loss(out_clean["cls"], out_deg["cls"], tau=self.dcs.tau)
 
         total = ce_loss + self.lambda_dcs * dcs_loss
         return total, ce_loss, dcs_loss

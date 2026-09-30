@@ -48,3 +48,28 @@ class DCSLoss(nn.Module):
 
     def forward(self, feat_clean: torch.Tensor, feat_degraded: torch.Tensor) -> torch.Tensor:
         return info_nce_loss(feat_clean, feat_degraded, self.tau)
+
+
+def multi_severity_dcs(z: torch.Tensor, z_views, weights=None, tau: float = 0.07):
+    """Weighted mean of ``info_nce_loss(z, z_k)`` over K degraded views.
+
+    Additive to the faithful L_DCS: every term is the unchanged ``info_nce_loss``
+    (symmetric InfoNCE, in-batch negatives, not class-aware). With K == 1 this is
+    exactly ``info_nce_loss(z, z_views[0])``.
+
+    Returns ``(loss, terms)``: ``loss = sum_k w_k * L_k / sum_k w_k`` and ``terms``
+    the list of detached per-view scalars (for logging only).
+    """
+    k = len(z_views)
+    if k == 0:
+        raise ValueError("z_views must contain at least one view")
+    if weights is None:
+        weights = [1.0] * k
+    if len(weights) != k:
+        raise ValueError(f"len(weights)={len(weights)} != number of views {k}")
+    w_sum = float(sum(weights))
+    if w_sum <= 0 or any(float(w) < 0 for w in weights):
+        raise ValueError(f"weights must be non-negative with positive sum, got {list(weights)}")
+    terms = [info_nce_loss(z, zk, tau=tau) for zk in z_views]
+    loss = sum(float(w) * t for w, t in zip(weights, terms)) / w_sum
+    return loss, [t.detach() for t in terms]

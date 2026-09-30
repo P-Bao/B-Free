@@ -54,3 +54,17 @@ degradation:
   # (0.6464->0.6510) vì trong nhánh compound resize luôn bị áp SAU JPEG(p=1.0), DCS
   # chưa từng thấy "resize trên ảnh sạch" giống giao thức single-operator dùng để test.
   single_op_prob: 0.4
+# Multi-Severity DCS (direction D-multiseverity-dcs) — additive mode, DEFAULT OFF.
+# enabled=false => training uses the v2 single lifecycle-degraded view, bit-identical.
+# Level ranges: source docx "Multi-Severity DCS AI Detection" (user-approved 2026-09-30).
+# noise_std255 is on the 0-255 pixel scale (assumption, docx sigma_n = 2..30).
+multi_severity:
+  enabled: false
+  compose: single_op        # single_op: 1 random op per view | compound: jpeg->blur->resize->noise at that level
+  views_per_step: 4         # 4 = all bins per step (A1); 1 = one random bin per sample (A2)
+  weights: [1, 1, 1, 1]     # per-bin weight in the DCS average (used when views_per_step == number of levels)
+  levels:
+    - {jpeg: [85, 95], blur_sigma: [0.5, 1.0], resize: [0.75, 0.90], noise_std255: [2, 5]}
+    - {jpeg: [65, 80], blur_sigma: [1.2, 2.0], resize: [0.50, 0.70], noise_std255: [6, 12]}
+    - {jpeg: [40, 60], blur_sigma: [2.2, 3.0], resize: [0.30, 0.45], noise_std255: [13, 20]}
+    - {jpeg: [20, 35], blur_sigma: [3.2, 4.5], resize: [0.15, 0.25], noise_std255: [21, 30]}
