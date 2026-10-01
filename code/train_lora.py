@@ -655,6 +655,7 @@ def try_batch(model, bs, img_size, device):
     except torch.cuda.OutOfMemoryError:
         return False
     finally:
+        model.zero_grad(set_to_none=True)
         torch.cuda.empty_cache()
 
 
@@ -811,6 +812,8 @@ def main():
     if batch_size == 0:
         if device.type != "cuda":
             raise RuntimeError("--batch_size=0 (auto-find) yêu cầu CUDA")
+        model.to(device)  # finder chạy trước accelerator.prepare -> model còn ở CPU
+        model.train()
         batch_size = find_max_batch_size(model, CFG["img_size"], device,
                                          CFG["batch_hard_cap"])
         logger.info(f"auto batch size = {batch_size}")
