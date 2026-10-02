@@ -77,6 +77,17 @@ def load_multi_severity_config(config_path):
     return ms
 
 
+# Hyperparameter phải khớp giữa các stage của cùng một run (resume kiểm tra).
+RESUME_CHECK_KEYS = (
+    "arch", "img_size", "epochs", "lr", "weight_decay", "scheduler_eta_min", "max_grad_norm",
+    "lambda_dcs", "dcs_tau", "label_smoothing", "lib_kernel", "lib_tau", "gsr_window",
+    "gsr_mask_prob", "lora_rank", "lora_alpha", "lora_dropout", "val_md5_percentile",
+    "val_fake_variant", "pair_real_prob", "degrade_max_rounds", "degrade_round_probs",
+    "extra_source_val_percentile", "aigenbench_max_per_gen", "aigenbench_val_frac",
+    "aigenbench_seed", "seed", "multi_severity",
+)
+
+
 def parse_args():
     p = argparse.ArgumentParser(description="K2 LoRA training (train-only, accelerate)")
     p.add_argument("--train_data_root", type=str, required=True,
@@ -97,7 +108,12 @@ def parse_args():
     p.add_argument("--lib_tau", type=float, default=0.5)
     p.add_argument("--gsr_window", type=int, default=3)
     p.add_argument("--gsr_mask_prob", type=float, default=1.0)
-    p.add_argument("--epochs", type=int, default=8)            # D2
+    p.add_argument("--epochs", type=int, default=8)            # D2 (tổng; quyết định lịch cosine)
+    p.add_argument("--end_epoch", type=int, default=0,
+                   help="dừng sau epoch này (0 = chạy hết --epochs). Dùng để chia train thành "
+                        "nhiều stage/notebook; lịch cosine vẫn theo tổng --epochs")
+    p.add_argument("--resume_from", type=str, default=None,
+                   help="resume_state.pth của stage trước (model+optimizer+scheduler+RNG+log)")
     p.add_argument("--lora_rank", type=int, default=16)
     p.add_argument("--lora_alpha", type=int, default=32)
     p.add_argument("--lora_dropout", type=float, default=0.05)
@@ -132,7 +148,11 @@ def parse_args():
         float(x) for x in CFG["degrade_round_probs"].split(",") if x.strip()
     ]
     CFG["multi_severity"] = load_multi_severity_config(CFG["config"])
-    for path_key in ("train_data_root", "dinov2_sd", "ai_genbench_dir"):
+    if CFG["end_epoch"] <= 0:
+        CFG["end_epoch"] = CFG["epochs"]
+    if not 1 <= CFG["end_epoch"] <= CFG["epochs"]:
+        raise ValueError(f"--end_epoch={CFG['end_epoch']} ngoài [1, {CFG['epochs']}]")
+    for path_key in ("train_data_root", "dinov2_sd", "ai_genbench_dir", "resume_from"):
         if CFG[path_key] is not None and not Path(CFG[path_key]).exists():
             raise FileNotFoundError(
                 f"--{path_key.replace('_', '-')} không tồn tại: {CFG[path_key]}")
@@ -781,8 +801,9 @@ def main():
             ExtraArrowTrainDataset(aigb_source, aigb_fake, 1, CFG["img_size"]),
         ]))
 
-    train_dataset = (train_sources[0] if len(train_sources) == 1
-                     else torch.utils.data.ConcatDataset(train_sources))
+    # Luôn bọc ConcatDataset: nếu dataset có `set_epoch`, accelerate gọi set_epoch(iteration từ 0)
+    # và ghi đè train_ds.set_epoch(epoch) (lịch real/fake sai, và lệch sau resume).
+    train_dataset = torch.utils.data.ConcatDataset(train_sources)
     logger.info(f"train sources = {len(train_sources)}")
 
     # ---- model: construct + D5 pretrained + LoRA ----
@@ -808,8 +829,29 @@ def main():
     accelerator = Accelerator(mixed_precision="bf16")
     device = accelerator.device
 
+    # ---- resume (stage > 1): model weights + kiểm tra config tương thích ----
+    resume = None
+    if CFG["resume_from"]:
+        resume = torch.load(CFG["resume_from"], map_location="cpu", weights_only=False)
+        prev = resume["config"]
+        bad = [k for k in RESUME_CHECK_KEYS if prev.get(k) != CFG.get(k)]
+        if bad:
+            raise RuntimeError("resume: config khác stage trước: " + ", ".join(
+                f"{k} (ckpt={prev.get(k)!r} vs now={CFG.get(k)!r})" for k in bad))
+        model.load_state_dict(resume["model"], strict=True)
+        logger.info(f"[resume] loaded {CFG['resume_from']} | done epoch {resume['epoch']} "
+                    f"-> train epoch {resume['epoch'] + 1}..{CFG['end_epoch']}/{CFG['epochs']}")
+        if resume["epoch"] >= CFG["end_epoch"]:
+            raise RuntimeError(f"resume epoch {resume['epoch']} >= end_epoch {CFG['end_epoch']}")
+
     batch_size = CFG["batch_size"]
-    if batch_size == 0:
+    if resume is not None:
+        # lịch cosine T_max = epochs * steps/epoch -> bắt buộc cùng batch size với stage trước
+        if batch_size not in (0, resume["batch_size"]):
+            raise RuntimeError(f"resume: --batch_size {batch_size} != ckpt {resume['batch_size']}")
+        batch_size = resume["batch_size"]
+        logger.info(f"[resume] batch size = {batch_size} (từ ckpt, bỏ qua finder)")
+    elif batch_size == 0:
         if device.type != "cuda":
             raise RuntimeError("--batch_size=0 (auto-find) yêu cầu CUDA")
         model.to(device)  # finder chạy trước accelerator.prepare -> model còn ở CPU
@@ -842,6 +884,23 @@ def main():
 
     model, optimizer, train_loader, val_loader = accelerator.prepare(
         model, optimizer, train_loader, val_loader)
+
+    train_log, best_bacc, start_epoch = [], 0.0, 1
+    if resume is not None:
+        assert resume["steps_per_epoch"] == len(train_loader), (
+            f"resume: steps/epoch {len(train_loader)} != ckpt {resume['steps_per_epoch']} "
+            "(dữ liệu hoặc batch size đã đổi)")
+        optimizer.load_state_dict(resume["optimizer"])
+        scheduler.load_state_dict(resume["scheduler"])
+        g.set_state(resume["loader_gen"])
+        random.setstate(resume["rng_python"])
+        np.random.set_state(resume["rng_numpy"])
+        torch.set_rng_state(resume["rng_torch"])
+        if torch.cuda.is_available() and resume.get("rng_cuda") is not None:
+            torch.cuda.set_rng_state(resume["rng_cuda"])
+        train_log, best_bacc, start_epoch = resume["train_log"], resume["best_bacc"], resume["epoch"] + 1
+        logger.info(f"[resume] optimizer/scheduler/RNG restored | lr now "
+                    f"{optimizer.param_groups[0]['lr']:.3e} | best bAcc so far {best_bacc:.4f}")
 
     # ---- train/val loops ----
     def run_epoch(epoch):
@@ -922,15 +981,35 @@ def main():
             state.update(extra)
         accelerator.save(state, path)
 
+    def save_resume(path, epoch, best):
+        state = {
+            "model": accelerator.unwrap_model(model).state_dict(),
+            "optimizer": optimizer.state_dict(), "scheduler": scheduler.state_dict(),
+            "epoch": epoch, "config": CFG, "train_log": train_log, "best_bacc": best,
+            "batch_size": batch_size, "steps_per_epoch": len(train_loader),
+            "loader_gen": g.get_state(), "rng_python": random.getstate(),
+            "rng_numpy": np.random.get_state(), "rng_torch": torch.get_rng_state(),
+            "rng_cuda": torch.cuda.get_rng_state() if torch.cuda.is_available() else None,
+        }
+        tmp = Path(str(path) + ".tmp")
+        torch.save(state, tmp)
+        os.replace(tmp, path)  # atomic: session chết giữa chừng không để lại file hỏng
+
     # ---- main loop ----
     log_csv = output_dir / "train_log.csv"
+
+    def csv_row(r):
+        return (f"{r['epoch']},{r['train_loss']:.4f},{r['train_ce']:.4f},{r['train_dcs']:.4f},"
+                f"{r['val_loss']:.4f},{r['val_auc']:.4f},{r['val_bacc']:.4f}"
+                + "".join(f",{r[f'dcs_k{i}']:.4f}" for i in range(1, n_ms + 1)) + "\n")
+
     with open(log_csv, "w", encoding="utf-8") as f:
         f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc"
                 + "".join(f",dcs_k{i}" for i in range(1, n_ms + 1)) + "\n")
+        for r in train_log:  # resume: giữ lại các epoch của stage trước
+            f.write(csv_row(r))
 
-    train_log = []
-    best_bacc = 0.0
-    for epoch in range(1, CFG["epochs"] + 1):
+    for epoch in range(start_epoch, CFG["end_epoch"] + 1):
         tr = run_epoch(epoch)
         va = run_val()
         logger.debug(f"--> epoch {epoch}: train total={tr['total']:.4f} "
@@ -942,26 +1021,29 @@ def main():
                           **{k: v for k, v in tr.items() if k.startswith("dcs_k")}})
         if accelerator.is_main_process:
             with open(log_csv, "a", encoding="utf-8") as f:
-                f.write(f"{epoch},{tr['total']:.4f},{tr['ce']:.4f},{tr['dcs']:.4f},"
-                        f"{va['val_loss']:.4f},{va['val_auc']:.4f},"
-                        f"{va['val_bacc']:.4f}"
-                        + "".join(f",{tr[f'dcs_k{i}']:.4f}" for i in range(1, n_ms + 1)) + "\n")
+                f.write(csv_row(train_log[-1]))
             if va["val_bacc"] > best_bacc:
                 best_bacc = va["val_bacc"]
                 save_ckpt(output_dir / "bfree_globalforge_lora_r16_best.pth",
                           epoch, train_log, extra={"val_bacc": best_bacc})
                 logger.info(f"[*] best checkpoint saved (epoch {epoch}, "
                             f"bAcc {best_bacc:.4f})")
+            save_resume(output_dir / "resume_state.pth", epoch, best_bacc)  # mỗi epoch
         logger.info(f"--> epoch {epoch}/{CFG['epochs']} done | best bAcc "
                     f"so far = {best_bacc:.4f}")
 
+    finished = CFG["end_epoch"] == CFG["epochs"]
     if accelerator.is_main_process:
         save_ckpt(output_dir / "bfree_globalforge_lora_r16.pth",
-                  CFG["epochs"], train_log)
-        selected = ("bfree_globalforge_lora_r16.pth" if CFG["select"] == "last"
-                    else "bfree_globalforge_lora_r16_best.pth")
-        (output_dir / "selected_ckpt.txt").write_text(selected + "\n")
-        logger.info(f"selected checkpoint for eval (--select {CFG['select']}): {selected}")
+                  CFG["end_epoch"], train_log)
+        if finished:
+            selected = ("bfree_globalforge_lora_r16.pth" if CFG["select"] == "last"
+                        else "bfree_globalforge_lora_r16_best.pth")
+            (output_dir / "selected_ckpt.txt").write_text(selected + "\n")
+            logger.info(f"selected checkpoint for eval (--select {CFG['select']}): {selected}")
+        else:
+            logger.info(f"STAGE DONE at epoch {CFG['end_epoch']}/{CFG['epochs']} -> stage tiếp theo: "
+                        f"--resume_from <output>/resume_state.pth (selected_ckpt.txt chưa ghi)")
 
         # training curves (matplotlib Agg — không cần display)
         import matplotlib
