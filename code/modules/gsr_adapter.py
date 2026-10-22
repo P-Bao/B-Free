@@ -30,11 +30,15 @@ class GSRAdapter(nn.Module):
     Residual connection: output = proj(attn @ V) + input.
     """
 
-    def __init__(self, dim: int = 768, window: int = 3, mask_prob: float = 1.0):
+    def __init__(self, dim: int = 768, window: int = 3, mask_prob: float = 1.0,
+                 zero_init_gate: bool = False):
         super().__init__()
         self.dim = dim
         self.window = window
         self.mask_prob = mask_prob
+        # P2.B: gate zero-init => out = tokens + gate * proj(attn @ V); gate=0 ở bước 0 nên
+        # GSR ≡ identity. Tham số chỉ tồn tại khi bật cờ (state_dict đường legacy không đổi).
+        self.gate = nn.Parameter(torch.zeros(1)) if zero_init_gate else None
 
         # Single-head attention: Q, K, V, proj đều là Linear(dim, dim)
         self.q = nn.Linear(dim, dim)
@@ -83,6 +87,9 @@ class GSRAdapter(nn.Module):
 
         attn = torch.softmax(attn, dim=-1)
         out = attn @ v
-        out = self.proj(out) + tokens  # Residual connection
+        if self.gate is None:
+            out = self.proj(out) + tokens  # Residual connection
+        else:
+            out = tokens + self.gate * self.proj(out)  # gated residual (zero-init)
 
         return out

@@ -32,6 +32,13 @@ def build_model_kwargs(cfg: dict) -> dict:
         "dcs_tau": l["dcs_tau"],
         "lambda_dcs": l["lambda_dcs"],
         "label_smoothing": l["label_smoothing"],
+        "head_mode": b.get("head_mode", "meanpool"),
+        "gsr_zero_init": bool(b.get("gsr_zero_init", False)),
+        "lib_beta_init": float(b.get("lib_beta_init", -0.85)),
+        "loss_mode": l.get("mode", l.get("loss_mode", "legacy")),
+        "w_deg": float(l.get("w_deg", 1.0)),
+        "lam_cons": float(l.get("lam_cons", 0.0)),
+        "cons_T": float(l.get("cons_T", 1.0)),
     }
 
 

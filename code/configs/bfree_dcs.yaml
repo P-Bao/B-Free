@@ -12,12 +12,31 @@ backbone:
   lib_tau: 0.5               # LocalInformationBottleneck tau (không dùng trong stub)
   gsr_window: 3              # GlobalStructuralReasoning window (Chebyshev)
   gsr_mask_prob: 1.0         # xác suất áp mask khi training
+  # P2.B (AGENT_PLAN_V4) — mặc định giữ giá trị legacy, trừ head_mode.
+  head_mode: cls             # cls: head đọc CLS token như B-Free (LIB/GSR chỉ nuôi L_DCS) | meanpool: legacy
+  gsr_zero_init: false       # true: GSR out = x + gate*proj(attn@V), gate=0 (nên bật khi --init_from bfree)
+  lib_beta_init: -0.85       # -0.85 = legacy (alpha~0.30); -6 => alpha0~0.0025 (nên dùng khi --init_from bfree)
 
 loss:
   use_dcs: true
   lambda_dcs: 0.1            # hệ số L_DCS trong total = CE + lambda_dcs * L_DCS (khởi điểm)
   dcs_tau: 0.07              # nhiệt độ InfoNCE (GlobalForge released: 0.07)
   label_smoothing: 0.1       # CE label smoothing (GlobalForge convention)
+  # P2.A (AGENT_PLAN_V4) — view suy giảm tham gia phân loại. mode=legacy giữ bit-identical v2.
+  mode: legacy               # legacy | dual_view  (dual_view không dùng chung với multi_severity)
+  w_deg: 1.0                 # dual_view: trọng số CE trên view suy giảm
+  lam_cons: 0.0              # dual_view: trọng số KL nhất quán clean->deg (khởi điểm thử {0, 0.5})
+  cons_T: 1.0                # dual_view: nhiệt độ cho KL nhất quán
+  p_aug_on_clean: 0.0        # dual_view: xác suất áp suy giảm kiểu lifecycle lên chính view sạch (khuyến nghị ~0.2)
+
+# P2.C / P2.F (AGENT_PLAN_V4) — cân bằng dữ liệu, chống shortcut & sàng lọc ablation.
+# Mặc định giữ nguyên hành vi v2 (mix_current, fmt_match=false, res_match=false, subsample=1.0).
+data:
+  mix_preset: mix_current    # mix_current (AIGB 4000/gen) | mix_bfree (AIGB 750/gen, <=25% tổng) | mix_noaigb
+  fmt_match: false           # true: real & fake trong AIGB/extra cùng qua JPEG ngẫu nhiên Q in [75,95] (p=0.5)
+  res_match: false           # true: thay bicubic ensure_min_size bằng replicate-wrap kiểu B-Free khi < img_size
+  holdout_generators: []     # danh sách generator trong PRIORITY_GENERATORS giữ lại không đưa vào train
+  train_subsample_frac: 1.0  # 1.0 = full train; 0.25 = sàng lọc P2.F (25% dữ liệu, deterministic theo seed)
 
 # Nguồn view suy giảm cho L_DCS (pipeline GlobalForge datasets_real.py:378-383):
 #   RandomJPEG(quality=(20,80), p=1.0)

@@ -77,6 +77,54 @@ def load_multi_severity_config(config_path):
     return ms
 
 
+def load_v4_config(config_path):
+    """Đọc các cờ P2.A/P2.B từ YAML (``backbone.*`` và ``loss.*``). Thiếu key => giá trị legacy
+    (config cũ không có các key này vẫn chạy đúng đường v2). Trả dict phẳng cho CFG."""
+    import yaml
+    path = Path(config_path)
+    if not path.is_absolute() and not path.exists():
+        path = Path(__file__).resolve().parent / path
+    if not path.is_file():
+        raise FileNotFoundError(f"--config không tồn tại: {config_path}")
+    with open(path, "r", encoding="utf-8") as f:
+        cfg = yaml.safe_load(f) or {}
+    b, l, d = cfg.get("backbone") or {}, cfg.get("loss") or {}, cfg.get("data") or {}
+    out = {
+        "use_lib": bool(b.get("use_lib", True)),
+        "use_gsr": bool(b.get("use_gsr", True)),
+        "use_dcs": bool(l.get("use_dcs", True)),
+        "head_mode": b.get("head_mode", "meanpool"),
+        "gsr_zero_init": bool(b.get("gsr_zero_init", False)),
+        "lib_beta_init": float(b.get("lib_beta_init", -0.85)),
+        "loss_mode": l.get("mode", "legacy"),
+        "w_deg": float(l.get("w_deg", 1.0)),
+        "lam_cons": float(l.get("lam_cons", 0.0)),
+        "cons_T": float(l.get("cons_T", 1.0)),
+        "p_aug_on_clean": float(l.get("p_aug_on_clean", 0.0)),
+        "mix_preset": d.get("mix_preset", "mix_current"),
+        "fmt_match": bool(d.get("fmt_match", False)),
+        "res_match": bool(d.get("res_match", False)),
+        "holdout_generators": list(d.get("holdout_generators") or []),
+        "train_subsample_frac": float(d.get("train_subsample_frac", 1.0)),
+    }
+    if out["head_mode"] not in ("cls", "meanpool"):
+        raise ValueError(f"backbone.head_mode={out['head_mode']!r} (cls|meanpool)")
+    if out["loss_mode"] not in ("legacy", "dual_view"):
+        raise ValueError(f"loss.mode={out['loss_mode']!r} (legacy|dual_view)")
+    if out["cons_T"] <= 0:
+        raise ValueError(f"loss.cons_T={out['cons_T']} phải > 0")
+    if not 0.0 <= out["p_aug_on_clean"] <= 1.0:
+        raise ValueError(f"loss.p_aug_on_clean={out['p_aug_on_clean']} ngoài [0, 1]")
+    if out["loss_mode"] == "legacy" and out["p_aug_on_clean"] > 0:
+        raise ValueError("loss.p_aug_on_clean > 0 chỉ có nghĩa với loss.mode=dual_view "
+                         "(legacy phải giữ bit-identical)")
+    if out["mix_preset"] not in ("mix_current", "mix_bfree", "mix_noaigb"):
+        raise ValueError(f"data.mix_preset={out['mix_preset']!r} (mix_current|mix_bfree|mix_noaigb)")
+    if not 0.0 < out["train_subsample_frac"] <= 1.0:
+        raise ValueError(f"data.train_subsample_frac={out['train_subsample_frac']} ngoài (0, 1]")
+    return out
+
+
 # Hyperparameter phải khớp giữa các stage của cùng một run (resume kiểm tra).
 RESUME_CHECK_KEYS = (
     "arch", "img_size", "epochs", "lr", "weight_decay", "scheduler_eta_min", "max_grad_norm",
@@ -85,6 +133,11 @@ RESUME_CHECK_KEYS = (
     "val_fake_variant", "pair_real_prob", "degrade_max_rounds", "degrade_round_probs",
     "extra_source_val_percentile", "aigenbench_max_per_gen", "aigenbench_val_frac",
     "aigenbench_seed", "seed", "multi_severity",
+    # P2.A / P2.B / P2.C / P2.F (AGENT_PLAN_V4)
+    "init_from", "use_lib", "use_gsr", "use_dcs",
+    "head_mode", "gsr_zero_init", "lib_beta_init",
+    "loss_mode", "w_deg", "lam_cons", "cons_T", "p_aug_on_clean",
+    "mix_preset", "fmt_match", "res_match", "holdout_generators", "train_subsample_frac",
 )
 
 
@@ -92,8 +145,14 @@ def parse_args():
     p = argparse.ArgumentParser(description="K2 LoRA training (train-only, accelerate)")
     p.add_argument("--train_data_root", type=str, required=True,
                    help="dataset root chứa COCO_real_512/ + 6 thư mục SD2.1_*")
-    p.add_argument("--dinov2_sd", type=str, required=True,
-                   help="DINOv2 ViT-B/14 reg4 model.safetensors (bundle notebook 01)")
+    p.add_argument("--dinov2_sd", type=str, default=None,
+                   help="DINOv2 ViT-B/14 reg4 model.safetensors (bundle notebook 01); "
+                        "bắt buộc khi --init_from dinov2")
+    p.add_argument("--init_from", choices=["dinov2", "bfree"], default="dinov2",
+                   help="dinov2: nạp DINOv2 pretrained (đường cũ); bfree: nạp checkpoint B-Free "
+                        "(head 1 logit -> 2 logit) qua BFreeGlobalForgeViT.load_checkpoint")
+    p.add_argument("--bfree_ckpt", type=str, default=None,
+                   help="checkpoint B-Free chính thức (dict có key 'model'); bắt buộc khi --init_from bfree")
     p.add_argument("--ai_genbench_dir", type=str, default=None,
                    help="HF Arrow DatasetDict ai-genbench-v1; bỏ trống = train không có AIGB")
     p.add_argument("--output_dir", type=str, default="/kaggle/working")
@@ -140,19 +199,65 @@ def parse_args():
     p.add_argument("--select", choices=["last", "best"], default="last",
                    help="checkpoint dùng cho eval: last-epoch (mặc định, không chọn theo val bão hòa) "
                         "hay best-val. Cả hai file vẫn được lưu; lựa chọn ghi vào selected_ckpt.txt")
+    # P2.A / P2.B / P2.C / P2.F optional CLI overrides (None = lấy từ --config YAML)
+    p.add_argument("--use_lib", type=int, choices=[0, 1], default=None)
+    p.add_argument("--use_gsr", type=int, choices=[0, 1], default=None)
+    p.add_argument("--use_dcs", type=int, choices=[0, 1], default=None)
+    p.add_argument("--head_mode", choices=["cls", "meanpool"], default=None)
+    p.add_argument("--gsr_zero_init", type=int, choices=[0, 1], default=None)
+    p.add_argument("--lib_beta_init", type=float, default=None)
+    p.add_argument("--loss_mode", choices=["legacy", "dual_view"], default=None)
+    p.add_argument("--w_deg", type=float, default=None)
+    p.add_argument("--lam_cons", type=float, default=None)
+    p.add_argument("--cons_T", type=float, default=None)
+    p.add_argument("--p_aug_on_clean", type=float, default=None)
+    p.add_argument("--mix_preset", choices=["mix_current", "mix_bfree", "mix_noaigb"], default=None)
+    p.add_argument("--fmt_match", type=int, choices=[0, 1], default=None)
+    p.add_argument("--res_match", type=int, choices=[0, 1], default=None)
+    p.add_argument("--holdout_generators", type=str, default=None,
+                   help="danh sách generator giữ lại cách nhau dấu phẩy (P2.C)")
+    p.add_argument("--train_subsample_frac", type=float, default=None,
+                   help="tỷ lệ lấy mẫu train (0,1]; sàng lọc P2.F dùng 0.25")
     args = p.parse_args()
 
-    CFG.update(vars(args))
+    cli_dict = vars(args)
+    v4_yaml = load_v4_config(cli_dict["config"])
+    CFG.update(cli_dict)
+    CFG.update(v4_yaml)
+    for bool_k in ("use_lib", "use_gsr", "use_dcs", "gsr_zero_init", "fmt_match", "res_match"):
+        if cli_dict.get(bool_k) is not None:
+            CFG[bool_k] = bool(cli_dict[bool_k])
+    for val_k in ("head_mode", "lib_beta_init", "loss_mode", "w_deg", "lam_cons",
+                  "cons_T", "p_aug_on_clean", "mix_preset", "train_subsample_frac"):
+        if cli_dict.get(val_k) is not None:
+            CFG[val_k] = cli_dict[val_k]
+    if cli_dict.get("holdout_generators") is not None:
+        CFG["holdout_generators"] = [
+            g.strip() for g in cli_dict["holdout_generators"].split(",") if g.strip()
+        ]
+    if CFG["mix_preset"] == "mix_bfree" and cli_dict.get("aigenbench_max_per_gen") == 4000:
+        # P2.C: mix_bfree giảm AIGB xuống ~750/gen (AIGB <= 25% tổng mẫu)
+        CFG["aigenbench_max_per_gen"] = 750
+    elif CFG["mix_preset"] == "mix_noaigb":
+        CFG["ai_genbench_dir"] = None
+    if CFG["loss_mode"] == "legacy" and CFG["p_aug_on_clean"] > 0:
+        raise ValueError("loss.p_aug_on_clean > 0 chỉ dùng với loss.mode=dual_view")
     CFG["num_classes"] = 2
     CFG["degrade_round_probs"] = [
         float(x) for x in CFG["degrade_round_probs"].split(",") if x.strip()
     ]
     CFG["multi_severity"] = load_multi_severity_config(CFG["config"])
+    if CFG["init_from"] == "dinov2" and CFG["dinov2_sd"] is None:
+        raise ValueError("--init_from dinov2 yêu cầu --dinov2_sd")
+    if CFG["init_from"] == "bfree" and CFG["bfree_ckpt"] is None:
+        raise ValueError("--init_from bfree yêu cầu --bfree_ckpt")
+    if CFG["loss_mode"] == "dual_view" and CFG["multi_severity"].get("enabled"):
+        raise ValueError("loss.mode=dual_view không dùng chung với multi_severity.enabled")
     if CFG["end_epoch"] <= 0:
         CFG["end_epoch"] = CFG["epochs"]
     if not 1 <= CFG["end_epoch"] <= CFG["epochs"]:
         raise ValueError(f"--end_epoch={CFG['end_epoch']} ngoài [1, {CFG['epochs']}]")
-    for path_key in ("train_data_root", "dinov2_sd", "ai_genbench_dir", "resume_from"):
+    for path_key in ("train_data_root", "dinov2_sd", "bfree_ckpt", "ai_genbench_dir", "resume_from"):
         if CFG[path_key] is not None and not Path(CFG[path_key]).exists():
             raise FileNotFoundError(
                 f"--{path_key.replace('_', '-')} không tồn tại: {CFG[path_key]}")
@@ -242,6 +347,16 @@ def degraded_view(img, normalize):
     return torch.stack([normalize(v) for v in _MS_DEGRADER(img)])
 
 
+def clean_view(img, normalize):
+    """View "sạch" của batch. Mặc định (p_aug_on_clean=0 / loss.mode=legacy) = normalize(img),
+    KHÔNG tiêu thụ RNG => bit-identical v2. P2.A: với xác suất p, áp suy giảm lifecycle lên chính
+    view sạch (view suy giảm của DCS vẫn lấy từ ``img`` gốc)."""
+    p = CFG.get("p_aug_on_clean", 0.0)
+    if p > 0 and random.random() < p:
+        return normalize(realistic_lifecycle_degrade(img, random))
+    return normalize(img)
+
+
 def split_views(img_deg):
     """Batch (B,K,3,H,W) -> list K tensors (B,3,H,W); tensor 4-D giữ nguyên (đường v2)."""
     if img_deg.dim() == 5:
@@ -263,10 +378,25 @@ def unwrap_dir(path):
 def ensure_min_size(img, min_size):
     w, h = img.size
     if min(w, h) < min_size:
+        if CFG.get("res_match", False):
+            # P2.C res_match: lặp biên (replicate-wrap kiểu B-Free) thay vì upscale Bicubic
+            arr = np.asarray(img)
+            rep_h = max(1, int(math.ceil(min_size / h)))
+            rep_w = max(1, int(math.ceil(min_size / w)))
+            arr = np.tile(arr, (rep_h, rep_w, 1))[:max(min_size, h), :max(min_size, w)]
+            return Image.fromarray(arr)
         scale = min_size / min(w, h)
         img = img.resize(
             (max(min_size, round(w * scale)), max(min_size, round(h * scale))),
             Image.BICUBIC)
+    return img
+
+
+def maybe_fmt_match(img):
+    """P2.C fmt_match: real & fake trong AIGB/extra cùng đi qua JPEG ngẫu nhiên Q in [75,95]
+    với xác suất 0.5 để khử shortcut định dạng PNG vs JPEG."""
+    if CFG.get("fmt_match", False) and random.random() < 0.5:
+        return apply_degradation(img, "jpeg", random.randint(75, 95))
     return img
 
 
@@ -380,7 +510,8 @@ class PairDataset(Dataset):
                 img = TF.hflip(img)
         else:
             img = TF.center_crop(img, (self.img_size, self.img_size))
-        return self.normalize(img), degraded_view(img, self.normalize), label
+        clean = clean_view(img, self.normalize) if self.is_train else self.normalize(img)
+        return clean, degraded_view(img, self.normalize), label
 
 
 def _is_extra_holdout(path):
@@ -417,11 +548,12 @@ class ExtraTrainDataset(Dataset):
     def __getitem__(self, i):
         img = Image.open(self.files[i]).convert("RGB")
         img = ensure_min_size(img, self.img_size)
+        img = maybe_fmt_match(img)
         t, l, h, w = T.RandomCrop.get_params(img, (self.img_size, self.img_size))
         img = TF.crop(img, t, l, h, w)
         if random.random() > 0.5:
             img = TF.hflip(img)
-        return self.normalize(img), degraded_view(img, self.normalize), self.label
+        return clean_view(img, self.normalize), degraded_view(img, self.normalize), self.label
 
 
 # ============================================================
@@ -501,8 +633,12 @@ def build_ai_genbench_train_groups():
     y = meta["y"].to_numpy()
     gens = meta["generator"]
 
+    holdout_set = set(CFG.get("holdout_generators") or [])
+    active_gens = [g for g in PRIORITY_GENERATORS if g not in holdout_set]
+    if holdout_set:
+        logger.info(f"[ai_genbench] holdout_generators={sorted(holdout_set)} -> active={len(active_gens)}")
     train_groups, val_groups = {}, {}
-    for g in PRIORITY_GENERATORS:
+    for g in active_gens:
         gi = meta.index[(y == 1) & (gens == g)].to_numpy()
         if CFG["aigenbench_max_per_gen"] and len(gi) > CFG["aigenbench_max_per_gen"]:
             gi = rng.choice(gi, CFG["aigenbench_max_per_gen"], replace=False)
@@ -564,13 +700,15 @@ class ExtraArrowTrainDataset(Dataset):
         img = self.source.get(self.indices[i]).convert("RGB")
         img = ensure_min_size(img, self.img_size)
         if self.augment:
+            img = maybe_fmt_match(img)
             t, l, h, w = T.RandomCrop.get_params(img, (self.img_size, self.img_size))
             img = TF.crop(img, t, l, h, w)
             if random.random() > 0.5:
                 img = TF.hflip(img)
         else:
             img = TF.center_crop(img, (self.img_size, self.img_size))
-        return self.normalize(img), degraded_view(img, self.normalize), self.label
+        clean = clean_view(img, self.normalize) if self.augment else self.normalize(img)
+        return clean, degraded_view(img, self.normalize), self.label
 
 
 # ============================================================
@@ -731,6 +869,9 @@ def main():
     else:
         logger.info("[multi_severity] OFF -> v2 single lifecycle-degraded view")
     n_ms = int(ms["views_per_step"]) if ms.get("enabled") else 0
+    # dual_view: log thêm ce_c / ce_d / cons (train) và val_* (val) vào train_log.csv
+    extra_keys = ["ce_c", "ce_d", "cons"] if CFG["loss_mode"] == "dual_view" else []
+    csv_extra = extra_keys + [f"val_{k}" for k in extra_keys]
 
     train_root = Path(CFG["train_data_root"])
     real_dir = unwrap_dir(train_root / "COCO_real_512")
@@ -804,7 +945,15 @@ def main():
     # Luôn bọc ConcatDataset: nếu dataset có `set_epoch`, accelerate gọi set_epoch(iteration từ 0)
     # và ghi đè train_ds.set_epoch(epoch) (lịch real/fake sai, và lệch sau resume).
     train_dataset = torch.utils.data.ConcatDataset(train_sources)
-    logger.info(f"train sources = {len(train_sources)}")
+    total_before_sub = len(train_dataset)
+    sub_frac = float(CFG.get("train_subsample_frac", 1.0))
+    if sub_frac < 1.0:
+        n_keep = max(1, int(round(total_before_sub * sub_frac)))
+        sub_rng = np.random.default_rng(CFG["seed"] + 2026)
+        keep_idx = sorted(int(i) for i in sub_rng.choice(total_before_sub, size=n_keep, replace=False))
+        train_dataset = torch.utils.data.Subset(train_dataset, keep_idx)
+        logger.info(f"[subsample] train_subsample_frac={sub_frac:.3f} -> kept {len(train_dataset)}/{total_before_sub} samples")
+    logger.info(f"train sources = {len(train_sources)} | total train samples = {len(train_dataset)}")
 
     # ---- model: construct + D5 pretrained + LoRA ----
     from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
@@ -813,13 +962,25 @@ def main():
     model = BFreeGlobalForgeViT(
         arch=CFG["arch"], num_classes=CFG["num_classes"],
         img_size=CFG["img_size"], pretrained=False,
-        use_lib=True, use_gsr=True, use_dcs=True,
+        use_lib=CFG["use_lib"], use_gsr=CFG["use_gsr"], use_dcs=CFG["use_dcs"],
         lib_kernel=CFG["lib_kernel"], lib_tau=CFG["lib_tau"],
         gsr_window=CFG["gsr_window"], gsr_mask_prob=CFG["gsr_mask_prob"],
         dcs_tau=CFG["dcs_tau"], lambda_dcs=CFG["lambda_dcs"],
         label_smoothing=CFG["label_smoothing"],
+        head_mode=CFG["head_mode"], gsr_zero_init=CFG["gsr_zero_init"],
+        lib_beta_init=CFG["lib_beta_init"], loss_mode=CFG["loss_mode"],
+        w_deg=CFG["w_deg"], lam_cons=CFG["lam_cons"], cons_T=CFG["cons_T"],
     )
-    model = load_pretrained_backbone(model, CFG["dinov2_sd"])
+    if CFG["init_from"] == "bfree":
+        rep = model.load_checkpoint(CFG["bfree_ckpt"], strict=False, require_complete_backbone=True)
+        logger.info(f"[init_from=bfree] {CFG['bfree_ckpt']} | {rep}")
+        if CFG["head_mode"] != "cls" or not CFG["gsr_zero_init"] or CFG["lib_beta_init"] > -5:
+            logger.warning("[init_from=bfree] 'bước 0 ≡ B-Free' cần head_mode=cls (+ gsr_zero_init=true, "
+                           "lib_beta_init≈-6 để LIB/GSR gần identity): "
+                           f"hiện head_mode={CFG['head_mode']} gsr_zero_init={CFG['gsr_zero_init']} "
+                           f"lib_beta_init={CFG['lib_beta_init']}")
+    else:
+        model = load_pretrained_backbone(model, CFG["dinov2_sd"])
     model = apply_lora_to_backbone(model, r=CFG["lora_rank"],
                                    lora_alpha=CFG["lora_alpha"],
                                    lora_dropout=CFG["lora_dropout"])
@@ -920,6 +1081,8 @@ def main():
             terms = getattr(accelerator.unwrap_model(model), "last_dcs_terms", {})
             for name, t in terms.items():
                 agg[name] = agg.get(name, 0.0) + float(t) * labels.size(0)
+            for name, t in getattr(accelerator.unwrap_model(model), "last_terms", {}).items():
+                agg[name] = agg.get(name, 0.0) + float(t) * labels.size(0)
             accelerator.backward(total)
             accelerator.clip_grad_norm_(
                 (p for p in model.parameters() if p.requires_grad),
@@ -943,7 +1106,7 @@ def main():
                 ce=f"{agg['ce']/max(agg['n'],1):.4f}",
                 dcs=f"{agg['dcs']/max(agg['n'],1):.4f}",
                 lr=f"{optimizer.param_groups[0]['lr']:.1e}")
-        keys = ["total", "ce", "dcs"] + [f"dcs_k{i}" for i in range(1, n_ms + 1)]
+        keys = ["total", "ce", "dcs"] + [f"dcs_k{i}" for i in range(1, n_ms + 1)] + extra_keys
         return {k: agg[k] / max(agg["n"], 1) for k in keys}
 
     @torch.no_grad()
@@ -963,6 +1126,8 @@ def main():
             scores.append((logits[:, 1] - logits[:, 0]).cpu())
             labels_all.append(labels.cpu())
             agg["total"] += float(total) * labels.size(0)
+            for name, t in getattr(accelerator.unwrap_model(model), "last_terms", {}).items():
+                agg[name] = agg.get(name, 0.0) + float(t) * labels.size(0)
             agg["n"] += labels.size(0)
         scores = torch.cat(scores).numpy()
         labels_all = torch.cat(labels_all).numpy()
@@ -970,6 +1135,7 @@ def main():
             "val_loss": agg["total"] / max(agg["n"], 1),
             "val_auc": roc_auc_score(labels_all, scores),
             "val_bacc": balanced_accuracy_score(labels_all, scores > 0),
+            **{f"val_{k}": agg.get(k, 0.0) / max(agg["n"], 1) for k in extra_keys},
         }
 
     def save_ckpt(path, epoch, train_log, extra=None):
@@ -1001,11 +1167,13 @@ def main():
     def csv_row(r):
         return (f"{r['epoch']},{r['train_loss']:.4f},{r['train_ce']:.4f},{r['train_dcs']:.4f},"
                 f"{r['val_loss']:.4f},{r['val_auc']:.4f},{r['val_bacc']:.4f}"
-                + "".join(f",{r[f'dcs_k{i}']:.4f}" for i in range(1, n_ms + 1)) + "\n")
+                + "".join(f",{r[f'dcs_k{i}']:.4f}" for i in range(1, n_ms + 1))
+                + "".join(f",{r[k]:.4f}" for k in csv_extra) + "\n")
 
     with open(log_csv, "w", encoding="utf-8") as f:
         f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc"
-                + "".join(f",dcs_k{i}" for i in range(1, n_ms + 1)) + "\n")
+                + "".join(f",dcs_k{i}" for i in range(1, n_ms + 1))
+                + "".join(f",{k}" for k in csv_extra) + "\n")
         for r in train_log:  # resume: giữ lại các epoch của stage trước
             f.write(csv_row(r))
 
@@ -1018,7 +1186,8 @@ def main():
                      f"bacc={va['val_bacc']:.4f}")
         train_log.append({"epoch": epoch, "train_loss": tr["total"],
                           "train_ce": tr["ce"], "train_dcs": tr["dcs"], **va,
-                          **{k: v for k, v in tr.items() if k.startswith("dcs_k")}})
+                          **{k: v for k, v in tr.items() if k.startswith("dcs_k")},
+                          **{k: tr[k] for k in extra_keys}})
         if accelerator.is_main_process:
             with open(log_csv, "a", encoding="utf-8") as f:
                 f.write(csv_row(train_log[-1]))

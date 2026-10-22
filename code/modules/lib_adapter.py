@@ -28,7 +28,8 @@ class LIBAdapter(nn.Module):
         x_hat = (1 - alpha) * x + alpha * blur(x),  alpha = sigmoid(beta)
     """
 
-    def __init__(self, dim: int = 768, kernel_size: int = 3, tau: float = 0.5):
+    def __init__(self, dim: int = 768, kernel_size: int = 3, tau: float = 0.5,
+                 beta_init: float = -0.85):
         super().__init__()
         self.dim = dim
         self.kernel_size = kernel_size
@@ -55,8 +56,9 @@ class LIBAdapter(nn.Module):
             )
         self.blur.weight.requires_grad = False  # Gaussian kernel KHÔNG học
 
-        # Scalar duy nhất cần học — khởi tạo -0.85 (giống bản gốc)
-        self.beta = nn.Parameter(torch.tensor(-0.85))
+        # Scalar duy nhất cần học — khởi tạo -0.85 (giống bản gốc). P2.B: beta_init=-6
+        # => alpha0 = sigmoid(-6) ~ 0.0025, LIB gần identity ở bước 0.
+        self.beta = nn.Parameter(torch.tensor(float(beta_init)))
 
     def forward(self, feat_tokens: torch.Tensor, hw: int = None):
         """
