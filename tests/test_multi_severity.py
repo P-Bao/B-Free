@@ -7,7 +7,7 @@ from PIL import Image
 import _common
 from bfree_datasets.multi_severity import MultiSeverityDegrader, validate_config, _apply
 
-CFG = yaml.safe_load(open(f"{_common.CODE}/configs/bfree_dcs.yaml"))["multi_severity"]
+CFG = yaml.safe_load(open(f"{_common.CODE}/configs/bfree_dcs.yaml", encoding="utf-8"))["multi_severity"]
 
 
 def _img(seed=0, size=96):

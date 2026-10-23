@@ -50,6 +50,37 @@ class DCSLoss(nn.Module):
         return info_nce_loss(feat_clean, feat_degraded, self.tau)
 
 
+def class_aware_info_nce(z: torch.Tensor, z_aug: torch.Tensor, labels: torch.Tensor,
+                         tau: float = 0.07) -> torch.Tensor:
+    """Class-aware InfoNCE (AGENT_PLAN_V5 S6), NOT SupCon: no same-class positives.
+
+    Anchor i (view z_i) has exactly one positive z'_i. The denominator keeps only
+    z'_j with y_j != y_i, so the paired fake of the same content is a hard
+    negative while same-class pairs are ignored. Anchors with no opposite-class
+    sample in the batch contribute zero (defined, no NaN).
+
+    Invariant to batch permutation. With ``z_aug = z`` and one class, returns 0.
+    """
+    if z.shape != z_aug.shape:
+        raise ValueError(f"shape mismatch {tuple(z.shape)} vs {tuple(z_aug.shape)}")
+    if labels.shape[0] != z.shape[0]:
+        raise ValueError("labels must have one entry per row")
+    z = F.normalize(z, dim=-1)
+    z_aug = F.normalize(z_aug, dim=-1)
+    sim = z @ z_aug.t() / tau                       # (B, B)
+    same = labels.view(-1, 1) == labels.view(1, -1)  # (B, B)
+    eye = torch.eye(sim.size(0), dtype=torch.bool, device=sim.device)
+    keep_neg = (~same) & ~eye
+    pos = sim.diag().unsqueeze(1)                   # (B, 1)
+    # logsumexp over {positive} U {opposite-class negatives}; masked entries -> -inf
+    logits = torch.cat([pos, sim.masked_fill(~keep_neg, float("-inf"))], dim=1)
+    has_neg = keep_neg.any(dim=1)
+    loss = -(pos.squeeze(1) - torch.logsumexp(logits, dim=1))
+    if not has_neg.any():
+        return loss.new_zeros(())
+    return loss[has_neg].mean()
+
+
 def multi_severity_dcs(z: torch.Tensor, z_views, weights=None, tau: float = 0.07):
     """Weighted mean of ``info_nce_loss(z, z_k)`` over K degraded views.
 

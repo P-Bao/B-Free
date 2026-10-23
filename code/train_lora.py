@@ -40,12 +40,14 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm.auto import tqdm
 
 from bfree_datasets.multi_severity import MultiSeverityDegrader, validate_config as validate_ms_config
+from modules.online_aug import OnlineAug
 from utils.normalization import get_list_norm
 from utils.dmetrics import balanced_accuracy_score, roc_auc_score
 
 logger = logging.getLogger("bfree")
 CFG = {}  # điền trong parse_args/main, đọc từ các module-level helpers
 _MS_DEGRADER = None  # MultiSeverityDegrader khi multi_severity.enabled; None = đường v2 mặc định
+_ONLINE_AUG = None   # OnlineAug khi online_aug bật; None = đường cũ (không aug CE)
 
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
 
@@ -61,9 +63,9 @@ PRIORITY_GENERATORS = [
 # CLI
 # ============================================================
 
-def load_multi_severity_config(config_path):
-    """Đọc CHỈ section ``multi_severity`` của YAML (các hyperparameter khác vẫn theo CLI).
-    Thiếu section => tắt (đường v2 mặc định)."""
+def load_yaml_config(config_path):
+    """Đọc toàn bộ YAML (backbone/loss/data/online_aug/multi_severity) làm default.
+    CLI truyền giá trị khác None sẽ override. Thiếu file => fail-fast."""
     import yaml
     path = Path(config_path)
     if not path.is_absolute() and not path.exists():
@@ -71,7 +73,13 @@ def load_multi_severity_config(config_path):
     if not path.is_file():
         raise FileNotFoundError(f"--config không tồn tại: {config_path}")
     with open(path, "r", encoding="utf-8") as f:
-        ms = (yaml.safe_load(f) or {}).get("multi_severity") or {"enabled": False}
+        return yaml.safe_load(f) or {}
+
+
+def load_multi_severity_config(config_path):
+    """Đọc CHỈ section ``multi_severity`` của YAML (các hyperparameter khác vẫn theo CLI).
+    Thiếu section => tắt (đường v2 mặc định)."""
+    ms = load_yaml_config(config_path).get("multi_severity") or {"enabled": False}
     if ms.get("enabled"):
         validate_ms_config(ms)
     return ms
@@ -80,11 +88,13 @@ def load_multi_severity_config(config_path):
 # Hyperparameter phải khớp giữa các stage của cùng một run (resume kiểm tra).
 RESUME_CHECK_KEYS = (
     "arch", "img_size", "epochs", "lr", "weight_decay", "scheduler_eta_min", "max_grad_norm",
-    "lambda_dcs", "dcs_tau", "label_smoothing", "lib_kernel", "lib_tau", "gsr_window",
-    "gsr_mask_prob", "lora_rank", "lora_alpha", "lora_dropout", "val_md5_percentile",
-    "val_fake_variant", "pair_real_prob", "degrade_max_rounds", "degrade_round_probs",
-    "extra_source_val_percentile", "aigenbench_max_per_gen", "aigenbench_val_frac",
-    "aigenbench_seed", "seed", "multi_severity",
+    "lambda_dcs", "dcs_tau", "dcs_mode", "label_smoothing", "lib_kernel", "lib_tau",
+    "lib_beta_init", "gsr_window", "gsr_mask_prob", "gsr_zero_init", "head_mode",
+    "use_lib", "use_gsr", "use_dcs", "lora_rank", "lora_alpha", "lora_dropout",
+    "val_md5_percentile", "val_fake_variant", "pair_real_prob", "degrade_max_rounds",
+    "degrade_round_probs", "extra_source_val_percentile", "aigenbench_max_per_gen",
+    "aigenbench_val_frac", "aigenbench_seed", "seed", "multi_severity",
+    "online_aug", "paired", "other_frac", "val_aug", "init_from",
 )
 
 
@@ -99,15 +109,15 @@ def parse_args():
     p.add_argument("--output_dir", type=str, default="/kaggle/working")
     p.add_argument("--config", type=str, default="configs/bfree_dcs.yaml")
 
-    p.add_argument("--arch", type=str, default="vit_base_patch14_reg4_dinov2.lvd142m")
-    p.add_argument("--img_size", type=int, default=504)
-    p.add_argument("--lambda_dcs", type=float, default=0.01)   # D1
-    p.add_argument("--dcs_tau", type=float, default=0.07)
-    p.add_argument("--label_smoothing", type=float, default=0.1)
-    p.add_argument("--lib_kernel", type=int, default=3)
-    p.add_argument("--lib_tau", type=float, default=0.5)
-    p.add_argument("--gsr_window", type=int, default=3)
-    p.add_argument("--gsr_mask_prob", type=float, default=1.0)
+    p.add_argument("--arch", type=str, default=None)
+    p.add_argument("--img_size", type=int, default=None)
+    p.add_argument("--lambda_dcs", type=float, default=None)   # D1
+    p.add_argument("--dcs_tau", type=float, default=None)
+    p.add_argument("--label_smoothing", type=float, default=None)
+    p.add_argument("--lib_kernel", type=int, default=None)
+    p.add_argument("--lib_tau", type=float, default=None)
+    p.add_argument("--gsr_window", type=int, default=None)
+    p.add_argument("--gsr_mask_prob", type=float, default=None)
     p.add_argument("--epochs", type=int, default=8)            # D2 (tổng; quyết định lịch cosine)
     p.add_argument("--end_epoch", type=int, default=0,
                    help="dừng sau epoch này (0 = chạy hết --epochs). Dùng để chia train thành "
@@ -140,9 +150,79 @@ def parse_args():
     p.add_argument("--select", choices=["last", "best"], default="last",
                    help="checkpoint dùng cho eval: last-epoch (mặc định, không chọn theo val bão hòa) "
                         "hay best-val. Cả hai file vẫn được lưu; lựa chọn ghi vào selected_ckpt.txt")
+    # ---- recipe / ablation flags (AGENT_PLAN_V5) — None = lấy từ YAML ----
+    p.add_argument("--head_mode", choices=["meanpool", "cls", "cls_plus_patch"], default=None,
+                   help="meanpool (v2) | cls (B-Free) | cls_plus_patch (gamma=0 -> ≡ cls)")
+    p.add_argument("--gsr_zero_init", action=argparse.BooleanOptionalAction, default=None,
+                   help="gate GSR khởi tạo 0 -> bước 0 ≡ không GSR")
+    p.add_argument("--lib_beta_init", type=float, default=None,
+                   help="-0.85 (v2, alpha≈0.30) | -10 (≈identity, S5)")
+    p.add_argument("--dcs_mode", choices=["legacy", "class_aware"], default=None,
+                   help="legacy = symmetric InfoNCE v2 | class_aware = S6 (negative khác lớp)")
+    p.add_argument("--use_lib", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--use_gsr", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--use_dcs", action=argparse.BooleanOptionalAction, default=None)
+    p.add_argument("--online_aug", choices=["off", "light", "bfree", "strong"], default=None,
+                   help="bật online augmentation cho đường CE; off = đường cũ")
+    p.add_argument("--paired", action=argparse.BooleanOptionalAction, default=None,
+                   help="batch chứa cặp real/fake cùng stem (cùng crop/lật)")
+    p.add_argument("--other_frac", type=float, default=None,
+                   help="tỉ lệ ảnh AIGB (không ghép cặp) mỗi batch khi --paired")
+    p.add_argument("--val_aug", action=argparse.BooleanOptionalAction, default=None,
+                   help="val dùng online_aug seed theo stem (chống bão hòa)")
+    p.add_argument("--init_from", choices=["dinov2", "bfree"], default=None,
+                   help="dinov2 (mặc định, độc lập) | bfree (warm-start, cần --bfree_ckpt)")
+    p.add_argument("--bfree_ckpt", type=str, default=None,
+                   help="checkpoint B-Free official cho --init_from bfree")
+    p.add_argument("--time_budget_hours", type=float, default=None,
+                   help="dừng an toàn sau epoch khi vượt ngân sách (0 = tắt); Kaggle dùng 10")
     args = p.parse_args()
 
-    CFG.update(vars(args))
+    y = load_yaml_config(args.config)
+    yb, yl, yd, ya = (y.get(k, {}) or {} for k in ("backbone", "loss", "data", "online_aug"))
+    cfg = {k: v for k, v in vars(args).items() if v is not None}
+    defaults = {
+        "ai_genbench_dir": None,
+        "resume_from": None,
+        "arch": yb.get("arch", "vit_base_patch14_reg4_dinov2.lvd142m"),
+        "img_size": yb.get("img_size", 504),
+        "lib_kernel": yb.get("lib_kernel", 3),
+        "lib_tau": yb.get("lib_tau", 0.5),
+        "gsr_window": yb.get("gsr_window", 3),
+        "gsr_mask_prob": yb.get("gsr_mask_prob", 1.0),
+        "dcs_tau": yl.get("dcs_tau", 0.07),
+        "lambda_dcs": yl.get("lambda_dcs", 0.1),
+        "label_smoothing": yl.get("label_smoothing", 0.1),
+        "head_mode": yb.get("head_mode", "meanpool"),
+        "gsr_zero_init": yb.get("gsr_zero_init", False),
+        "lib_beta_init": yb.get("lib_beta_init", -0.85),
+        "dcs_mode": yl.get("dcs_mode", "legacy"),
+        "use_lib": yb.get("use_lib", True),
+        "use_gsr": yb.get("use_gsr", True),
+        "use_dcs": yl.get("use_dcs", True),
+        "paired": yd.get("paired", False),
+        "other_frac": yd.get("other_frac", 0.0),
+        "val_aug": yd.get("val_aug", False),
+        "init_from": "dinov2",
+        "bfree_ckpt": None,
+        "time_budget_hours": 0.0,
+    }
+    for k, v in defaults.items():
+        cfg.setdefault(k, v)
+
+    aug_cfg = dict(ya)
+    if args.online_aug is not None:
+        aug_cfg["enabled"] = args.online_aug != "off"
+        aug_cfg["preset"] = args.online_aug
+    cfg["online_aug"] = aug_cfg if aug_cfg.get("enabled") else None
+    if cfg["paired"] and not (0.0 <= float(cfg["other_frac"]) < 0.9):
+        raise ValueError("--other_frac phải trong [0, 0.9)")
+    if cfg["init_from"] == "bfree" and not cfg["bfree_ckpt"]:
+        raise ValueError("--init_from bfree cần --bfree_ckpt")
+    if cfg["time_budget_hours"] < 0:
+        raise ValueError("--time_budget_hours phải >= 0")
+
+    CFG.update(cfg)
     CFG["num_classes"] = 2
     CFG["degrade_round_probs"] = [
         float(x) for x in CFG["degrade_round_probs"].split(",") if x.strip()
@@ -152,10 +232,12 @@ def parse_args():
         CFG["end_epoch"] = CFG["epochs"]
     if not 1 <= CFG["end_epoch"] <= CFG["epochs"]:
         raise ValueError(f"--end_epoch={CFG['end_epoch']} ngoài [1, {CFG['epochs']}]")
-    for path_key in ("train_data_root", "dinov2_sd", "ai_genbench_dir", "resume_from"):
-        if CFG[path_key] is not None and not Path(CFG[path_key]).exists():
+    for path_key in ("train_data_root", "dinov2_sd", "ai_genbench_dir", "resume_from", "bfree_ckpt"):
+        if CFG.get(path_key) is not None and not Path(CFG[path_key]).exists():
             raise FileNotFoundError(
                 f"--{path_key.replace('_', '-')} không tồn tại: {CFG[path_key]}")
+    if CFG["init_from"] == "dinov2":
+        CFG["bfree_ckpt"] = None  # không đưa path thừa vào checkpoint config
     return args
 
 
@@ -249,6 +331,18 @@ def split_views(img_deg):
     return img_deg
 
 
+def online_aug_view(img, rng=None):
+    """Áp online_aug cho đường CE; None => ảnh giữ nguyên (đường cũ)."""
+    return _ONLINE_AUG(img, rng) if _ONLINE_AUG is not None else img
+
+
+def val_aug_view(img, stem):
+    """Val cố định: cùng stem + cùng seed => cùng augmentation mỗi epoch (không bão hòa)."""
+    if _ONLINE_AUG is None or not CFG.get("val_aug"):
+        return img
+    return _ONLINE_AUG(img, random.Random(int(hashlib.md5(f"val:{stem}".encode()).hexdigest(), 16)))
+
+
 # ============================================================
 # Dataset — stem index + fixed 8-epoch fake schedule (D4) + extra sources
 # ============================================================
@@ -297,6 +391,30 @@ def is_val_id(stem):
             < CFG["val_md5_percentile"])
 
 
+def build_fake_schedule(ids, fake_maps, n_epochs, pair_real_prob):
+    """Lịch fake không lặp theo epoch; seed theo md5(stem) — tách ra để PairDataset và
+    PairedStemDataset dùng chung (PairDataset giữ nguyên hành vi v2)."""
+    n_variants = len(fake_maps)
+    n_fake = min(n_epochs, round(n_epochs * (1 - pair_real_prob)))
+    schedule = {}
+    for stem in ids:
+        available = [v for v in range(n_variants) if stem in fake_maps[v]]
+        if not available:
+            continue
+        rng = random.Random(int(hashlib.md5(stem.encode()).hexdigest(), 16))
+        slots = list(range(1, n_epochs + 1))
+        rng.shuffle(slots)
+        fake_epochs = sorted(slots[:n_fake])
+        bag, assigned = [], []
+        for _ in fake_epochs:
+            if not bag:
+                bag = available.copy()
+                rng.shuffle(bag)
+            assigned.append(bag.pop())
+        schedule[stem] = dict(zip(fake_epochs, assigned))
+    return schedule
+
+
 class PairDataset(Dataset):
     """Train: lịch 8-epoch/ID cố định — round(epochs*(1-p)) epoch là fake, các epoch fake
     gán KHÔNG LẶP biến thể SD2.1 (seed = md5(stem)), 50/50 real/fake đúng D4.
@@ -325,26 +443,7 @@ class PairDataset(Dataset):
             self.epoch_value.value = epoch
 
     def _build_fake_schedule(self):
-        n_variants = len(self.fake_maps)
-        n_epochs = CFG["epochs"]
-        n_fake = min(n_epochs, round(n_epochs * (1 - self.pair_real_prob)))
-        schedule = {}
-        for stem in self.ids:
-            available = [v for v in range(n_variants) if stem in self.fake_maps[v]]
-            if not available:
-                continue
-            rng = random.Random(int(hashlib.md5(stem.encode()).hexdigest(), 16))
-            slots = list(range(1, n_epochs + 1))
-            rng.shuffle(slots)
-            fake_epochs = sorted(slots[:n_fake])
-            bag, assigned = [], []
-            for _ in fake_epochs:
-                if not bag:
-                    bag = available.copy()
-                    rng.shuffle(bag)
-                assigned.append(bag.pop())
-            schedule[stem] = dict(zip(fake_epochs, assigned))
-        return schedule
+        return build_fake_schedule(self.ids, self.fake_maps, CFG["epochs"], self.pair_real_prob)
 
     def __len__(self):
         return len(self.ids) * (1 if self.is_train else 2)
@@ -378,8 +477,10 @@ class PairDataset(Dataset):
             img = TF.crop(img, t, l, h, w)
             if random.random() > 0.5:
                 img = TF.hflip(img)
+            img = online_aug_view(img)
         else:
             img = TF.center_crop(img, (self.img_size, self.img_size))
+            img = val_aug_view(img, stem)
         return self.normalize(img), degraded_view(img, self.normalize), label
 
 
@@ -421,7 +522,113 @@ class ExtraTrainDataset(Dataset):
         img = TF.crop(img, t, l, h, w)
         if random.random() > 0.5:
             img = TF.hflip(img)
+        img = online_aug_view(img)
         return self.normalize(img), degraded_view(img, self.normalize), self.label
+
+
+# ============================================================
+# Paired real/fake (cùng stem, cùng crop/lật) — AGENT_PLAN_V5 1.2
+# ============================================================
+
+class PairedStemDataset(Dataset):
+    """Mỗi stem -> 2 mẫu liên tiếp: [real, fake]. Crop và lật lấy từ cùng seed
+    (md5(stem:epoch)) nên cặp thật/giả cùng nội dung; augmentation độc lập.
+
+    Dùng kèm PairedBatchSampler để batch chứa đủ cặp. Đường PairDataset giữ nguyên."""
+
+    def __init__(self, ids, img_size, real_map, fake_maps):
+        self.ids = ids
+        self.img_size = img_size
+        self.real_map = real_map
+        self.fake_maps = fake_maps
+        self.normalize = T.Compose(get_list_norm("resnet"))
+        self.epoch_value = multiprocessing.Value("i", 1)
+        self.fake_schedule = build_fake_schedule(ids, fake_maps, CFG["epochs"], CFG["pair_real_prob"])
+
+    def set_epoch(self, epoch):
+        self.epoch_value.value = epoch
+
+    def __len__(self):
+        return len(self.ids) * 2
+
+    def _fake_path(self, stem):
+        schedule = self.fake_schedule.get(stem, {})
+        variant = schedule.get(self.epoch_value.value)
+        if variant is not None:
+            return self.fake_maps[variant].get(stem)
+        for m in self.fake_maps:          # epoch không có slot fake -> lấy biến thể bất kỳ
+            if stem in m:
+                return m[stem]
+        return None
+
+    def __getitem__(self, i):
+        stem = self.ids[i // 2]
+        label = i % 2
+        path = self.real_map[stem] if label == 0 else self._fake_path(stem)
+        assert path is not None, f"No image found for id {stem} (label={label})"
+        img = Image.open(path).convert("RGB")
+        rng = random.Random(int(hashlib.md5(
+            f"{stem}:{self.epoch_value.value}:crop".encode()).hexdigest(), 16))
+        w, h = img.size
+        top = rng.randrange(0, max(1, h - self.img_size + 1))
+        left = rng.randrange(0, max(1, w - self.img_size + 1))
+        img = TF.crop(img, top, left, self.img_size, self.img_size)
+        if rng.random() > 0.5:
+            img = TF.hflip(img)
+        img = online_aug_view(img, random.Random(int(hashlib.md5(
+            f"{stem}:{self.epoch_value.value}:aug:{label}".encode()).hexdigest(), 16)))
+        return self.normalize(img), degraded_view(img, self.normalize), label
+
+
+class PairedBatchSampler(torch.utils.data.Sampler):
+    """Batch = các cặp [real, fake] của cùng stem + tỉ lệ ảnh khác (AIGB) nếu có.
+
+    `n_paired` = len(PairedStemDataset) (2 mẫu/stem, chỉ số chẵn/lẻ là 1 cặp);
+    `n_other` = số ảnh không ghép cặp nối sau trong ConcatDataset.
+    """
+
+    def __init__(self, n_paired, n_other, batch_size, other_frac=0.0, seed=42):
+        if batch_size < 4:
+            raise ValueError("paired batch cần batch_size >= 4")
+        self.n_paired, self.n_other = int(n_paired), int(n_other)
+        self.batch_size = int(batch_size)
+        self.other_per_batch = int(round(self.batch_size * float(other_frac))) if n_other else 0
+        max_other = self.batch_size - 4
+        self.other_per_batch = min(self.other_per_batch, max_other)
+        if (self.batch_size - self.other_per_batch) % 2:
+            self.other_per_batch += 1
+        self.pairs_per_batch = (self.batch_size - self.other_per_batch) // 2
+        self.seed = int(seed)
+        self.epoch = 1
+
+    def set_epoch(self, epoch):
+        self.epoch = int(epoch)
+
+    def __len__(self):
+        stems = self.n_paired // 2
+        steps = stems // self.pairs_per_batch
+        if self.other_per_batch:
+            steps = min(steps, self.n_other // self.other_per_batch)
+        return max(0, steps)
+
+    def __iter__(self):
+        rng = random.Random(self.seed * 100003 + self.epoch)
+        stems = list(range(self.n_paired // 2))
+        rng.shuffle(stems)
+        others = list(range(self.n_paired, self.n_paired + self.n_other))
+        rng.shuffle(others)
+        si = oi = 0
+        for _ in range(len(self)):
+            batch = []
+            for stem in stems[si:si + self.pairs_per_batch]:
+                batch += [2 * stem, 2 * stem + 1]
+            si += self.pairs_per_batch
+            take = min(self.other_per_batch, len(others) - oi)
+            batch += others[oi:oi + take]
+            oi += take
+            rng.shuffle(batch)
+            if len(batch) == self.batch_size:
+                yield batch
 
 
 # ============================================================
@@ -568,6 +775,7 @@ class ExtraArrowTrainDataset(Dataset):
             img = TF.crop(img, t, l, h, w)
             if random.random() > 0.5:
                 img = TF.hflip(img)
+            img = online_aug_view(img)
         else:
             img = TF.center_crop(img, (self.img_size, self.img_size))
         return self.normalize(img), degraded_view(img, self.normalize), self.label
@@ -702,11 +910,12 @@ def find_max_batch_size(model, img_size, device, hard_cap):
 
 
 def main():
-    global _MS_DEGRADER
+    global _MS_DEGRADER, _ONLINE_AUG
     args = parse_args()
     output_dir = Path(CFG["output_dir"])
     output_dir.mkdir(parents=True, exist_ok=True)
     setup_logging(output_dir)
+    t_start = time.time()
 
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
     os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
@@ -731,6 +940,13 @@ def main():
     else:
         logger.info("[multi_severity] OFF -> v2 single lifecycle-degraded view")
     n_ms = int(ms["views_per_step"]) if ms.get("enabled") else 0
+
+    _ONLINE_AUG = OnlineAug(CFG["online_aug"]) if CFG["online_aug"] else None
+    if _ONLINE_AUG is not None:
+        logger.info(f"[online_aug] ON: preset={_ONLINE_AUG.preset} p_any={_ONLINE_AUG.cfg['p_any']} "
+                    f"(params are PLACEHOLDERS — check B-Free appendix)")
+    else:
+        logger.info("[online_aug] OFF -> CE trên ảnh sạch (đường cũ)")
 
     train_root = Path(CFG["train_data_root"])
     real_dir = unwrap_dir(train_root / "COCO_real_512")
@@ -765,7 +981,13 @@ def main():
                 f"| labels val[0],val[1]={c},{c2} (expect 0,1)")
 
     # ---- extra sources: RAISE/LDM/SD3-FLUX (train phần, held-out cho OOD notebook) ----
-    train_sources = [train_ds]
+    paired_ds = None
+    if CFG["paired"]:
+        paired_ds = PairedStemDataset(train_ids, CFG["img_size"], real_map, fake_maps)
+        train_sources = [paired_ds]
+        logger.info(f"[paired] ON: {len(paired_ds)} mẫu ({len(train_ids)} cặp real/fake cùng stem)")
+    else:
+        train_sources = [train_ds]
     raise_dir = _resolve_extra_source("real_RAISE_1k", train_root)
     ldm_dir = _resolve_extra_source("latent-diffusion", train_root)
     sd3_dir = _resolve_extra_source("sd3_flux", train_root)
@@ -804,7 +1026,7 @@ def main():
     # Luôn bọc ConcatDataset: nếu dataset có `set_epoch`, accelerate gọi set_epoch(iteration từ 0)
     # và ghi đè train_ds.set_epoch(epoch) (lịch real/fake sai, và lệch sau resume).
     train_dataset = torch.utils.data.ConcatDataset(train_sources)
-    logger.info(f"train sources = {len(train_sources)}")
+    logger.info(f"train sources = {len(train_sources)} | total samples = {len(train_dataset)}")
 
     # ---- model: construct + D5 pretrained + LoRA ----
     from networks.bfree_globalforge_vit import BFreeGlobalForgeViT
@@ -813,13 +1035,29 @@ def main():
     model = BFreeGlobalForgeViT(
         arch=CFG["arch"], num_classes=CFG["num_classes"],
         img_size=CFG["img_size"], pretrained=False,
-        use_lib=True, use_gsr=True, use_dcs=True,
+        use_lib=CFG["use_lib"], use_gsr=CFG["use_gsr"], use_dcs=CFG["use_dcs"],
         lib_kernel=CFG["lib_kernel"], lib_tau=CFG["lib_tau"],
+        lib_beta_init=CFG["lib_beta_init"],
         gsr_window=CFG["gsr_window"], gsr_mask_prob=CFG["gsr_mask_prob"],
-        dcs_tau=CFG["dcs_tau"], lambda_dcs=CFG["lambda_dcs"],
+        gsr_zero_init=CFG["gsr_zero_init"], head_mode=CFG["head_mode"],
+        dcs_tau=CFG["dcs_tau"], lambda_dcs=CFG["lambda_dcs"], dcs_mode=CFG["dcs_mode"],
         label_smoothing=CFG["label_smoothing"],
     )
-    model = load_pretrained_backbone(model, CFG["dinov2_sd"])
+    if CFG["init_from"] == "bfree":
+        report = model.load_checkpoint(CFG["bfree_ckpt"], strict=False)
+        logger.info(f"[init] bfree: {CFG['bfree_ckpt']} | missing={report['num_missing']} "
+                    f"unexpected={report['num_unexpected']} skipped_shape={report['num_skipped_shape']}")
+        if report["num_unexpected"] or report["num_skipped_shape"]:
+            raise RuntimeError(
+                f"init_from=bfree nạp không sạch: unexpected={report['unexpected_keys']} "
+                f"skipped={report['skipped_shape']}")
+        # head/fc_norm/backbone phải khớp; chỉ module mới (LIB/GSR/extra_head) được missing
+        unexpected_missing = [k for k in report["missing_keys"]
+                              if not k.startswith(("lib.", "gsr.", "extra_head."))]
+        if unexpected_missing:
+            raise RuntimeError(f"init_from=bfree thiếu key ngoài module: {sorted(unexpected_missing)}")
+    else:
+        model = load_pretrained_backbone(model, CFG["dinov2_sd"])
     model = apply_lora_to_backbone(model, r=CFG["lora_rank"],
                                    lora_alpha=CFG["lora_alpha"],
                                    lora_dropout=CFG["lora_dropout"])
@@ -873,8 +1111,26 @@ def main():
         num_workers=CFG["num_workers"], pin_memory=True, drop_last=True,
         persistent_workers=CFG["num_workers"] > 0,
         worker_init_fn=seed_worker, generator=g)
+    paired_sampler = None
+    if paired_ds is not None:
+        paired_sampler = PairedBatchSampler(
+            len(paired_ds), len(train_dataset) - len(paired_ds), batch_size,
+            CFG["other_frac"], CFG["seed"])
+        train_loader = DataLoader(
+            train_dataset, batch_sampler=paired_sampler,
+            num_workers=CFG["num_workers"], pin_memory=True,
+            persistent_workers=CFG["num_workers"] > 0,
+            worker_init_fn=seed_worker)
     val_loader = DataLoader(val_ds, batch_size=max(2, batch_size // 2), shuffle=False,
                             num_workers=CFG["num_workers"], pin_memory=True)
+
+    def set_train_epoch(epoch):
+        if paired_ds is not None:
+            paired_ds.set_epoch(epoch)
+        else:
+            train_ds.set_epoch(epoch)
+        if paired_sampler is not None:
+            paired_sampler.set_epoch(epoch)
 
     optimizer = AdamW((p for p in model.parameters() if p.requires_grad),
                       lr=CFG["lr"], weight_decay=CFG["weight_decay"])
@@ -904,7 +1160,7 @@ def main():
 
     # ---- train/val loops ----
     def run_epoch(epoch):
-        train_ds.set_epoch(epoch)
+        set_train_epoch(epoch)
         model.train()
         agg = {"total": 0.0, "ce": 0.0, "dcs": 0.0, "n": 0}
         pbar = tqdm(train_loader, desc=f"epoch {epoch}/{CFG['epochs']} [train]",
@@ -944,7 +1200,10 @@ def main():
                 dcs=f"{agg['dcs']/max(agg['n'],1):.4f}",
                 lr=f"{optimizer.param_groups[0]['lr']:.1e}")
         keys = ["total", "ce", "dcs"] + [f"dcs_k{i}" for i in range(1, n_ms + 1)]
-        return {k: agg[k] / max(agg["n"], 1) for k in keys}
+        out = {k: agg[k] / max(agg["n"], 1) for k in keys}
+        extra_head = getattr(accelerator.unwrap_model(model), "extra_head", None)
+        out["gamma"] = float(extra_head.gamma) if extra_head is not None else float("nan")
+        return out
 
     @torch.no_grad()
     def run_val():
@@ -1000,15 +1259,17 @@ def main():
 
     def csv_row(r):
         return (f"{r['epoch']},{r['train_loss']:.4f},{r['train_ce']:.4f},{r['train_dcs']:.4f},"
-                f"{r['val_loss']:.4f},{r['val_auc']:.4f},{r['val_bacc']:.4f}"
+                f"{r['val_loss']:.4f},{r['val_auc']:.4f},{r['val_bacc']:.4f},"
+                f"{r.get('gamma', float('nan')):.6f}"
                 + "".join(f",{r[f'dcs_k{i}']:.4f}" for i in range(1, n_ms + 1)) + "\n")
 
     with open(log_csv, "w", encoding="utf-8") as f:
-        f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc"
+        f.write("epoch,train_loss,train_ce,train_dcs,val_loss,val_auc,val_bacc,gamma"
                 + "".join(f",dcs_k{i}" for i in range(1, n_ms + 1)) + "\n")
         for r in train_log:  # resume: giữ lại các epoch của stage trước
             f.write(csv_row(r))
 
+    stopped_early = False
     for epoch in range(start_epoch, CFG["end_epoch"] + 1):
         tr = run_epoch(epoch)
         va = run_val()
@@ -1017,7 +1278,8 @@ def main():
                      f"val loss={va['val_loss']:.4f} auc={va['val_auc']:.4f} "
                      f"bacc={va['val_bacc']:.4f}")
         train_log.append({"epoch": epoch, "train_loss": tr["total"],
-                          "train_ce": tr["ce"], "train_dcs": tr["dcs"], **va,
+                          "train_ce": tr["ce"], "train_dcs": tr["dcs"],
+                          "gamma": tr["gamma"], **va,
                           **{k: v for k, v in tr.items() if k.startswith("dcs_k")}})
         if accelerator.is_main_process:
             with open(log_csv, "a", encoding="utf-8") as f:
@@ -1031,18 +1293,27 @@ def main():
             save_resume(output_dir / "resume_state.pth", epoch, best_bacc)  # mỗi epoch
         logger.info(f"--> epoch {epoch}/{CFG['epochs']} done | best bAcc "
                     f"so far = {best_bacc:.4f}")
+        elapsed_h = (time.time() - t_start) / 3600.0
+        if CFG["time_budget_hours"] > 0 and elapsed_h > CFG["time_budget_hours"]:
+            stopped_early = True
+            logger.warning(f"[time_budget] {elapsed_h:.2f}h > {CFG['time_budget_hours']}h "
+                           f"-> dừng an toàn sau epoch {epoch}; resume_state.pth đã lưu")
+            break
 
-    finished = CFG["end_epoch"] == CFG["epochs"]
+    last_epoch = train_log[-1]["epoch"] if train_log else start_epoch - 1
+    finished = last_epoch >= CFG["epochs"]
     if accelerator.is_main_process:
         save_ckpt(output_dir / "bfree_globalforge_lora_r16.pth",
-                  CFG["end_epoch"], train_log)
+                  last_epoch, train_log)
         if finished:
             selected = ("bfree_globalforge_lora_r16.pth" if CFG["select"] == "last"
                         else "bfree_globalforge_lora_r16_best.pth")
             (output_dir / "selected_ckpt.txt").write_text(selected + "\n")
             logger.info(f"selected checkpoint for eval (--select {CFG['select']}): {selected}")
         else:
-            logger.info(f"STAGE DONE at epoch {CFG['end_epoch']}/{CFG['epochs']} -> stage tiếp theo: "
+            done_epoch = train_log[-1]["epoch"] if train_log else start_epoch - 1
+            why = "time budget" if stopped_early else "stage split"
+            logger.info(f"STAGE DONE at epoch {done_epoch}/{CFG['epochs']} ({why}) -> stage tiếp theo: "
                         f"--resume_from <output>/resume_state.pth (selected_ckpt.txt chưa ghi)")
 
         # training curves (matplotlib Agg — không cần display)

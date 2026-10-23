@@ -30,7 +30,8 @@ class GSRAdapter(nn.Module):
     Residual connection: output = proj(attn @ V) + input.
     """
 
-    def __init__(self, dim: int = 768, window: int = 3, mask_prob: float = 1.0):
+    def __init__(self, dim: int = 768, window: int = 3, mask_prob: float = 1.0,
+                 zero_init: bool = False):
         super().__init__()
         self.dim = dim
         self.window = window
@@ -41,6 +42,12 @@ class GSRAdapter(nn.Module):
         self.k = nn.Linear(dim, dim)
         self.v = nn.Linear(dim, dim)
         self.proj = nn.Linear(dim, dim)
+
+        # zero_init: out = tokens + gate * proj(...), gate=0 -> bước 0 ≡ không có GSR.
+        if zero_init:
+            self.gate = nn.Parameter(torch.zeros(1))
+        else:
+            self.gate = None
 
     def forward(self, tokens: torch.Tensor, hw: int = None):
         """
@@ -83,6 +90,6 @@ class GSRAdapter(nn.Module):
 
         attn = torch.softmax(attn, dim=-1)
         out = attn @ v
-        out = self.proj(out) + tokens  # Residual connection
-
-        return out
+        if self.gate is not None:
+            return tokens + self.gate * self.proj(out)
+        return self.proj(out) + tokens  # Residual connection

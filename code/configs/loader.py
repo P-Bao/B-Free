@@ -26,11 +26,15 @@ def build_model_kwargs(cfg: dict) -> dict:
         "use_gsr": b["use_gsr"],
         "lib_kernel": b["lib_kernel"],
         "lib_tau": b["lib_tau"],
+        "lib_beta_init": b.get("lib_beta_init", -0.85),
         "gsr_window": b["gsr_window"],
         "gsr_mask_prob": b["gsr_mask_prob"],
+        "gsr_zero_init": b.get("gsr_zero_init", False),
+        "head_mode": b.get("head_mode", "meanpool"),
         "use_dcs": l["use_dcs"],
         "dcs_tau": l["dcs_tau"],
         "lambda_dcs": l["lambda_dcs"],
+        "dcs_mode": l.get("dcs_mode", "legacy"),
         "label_smoothing": l["label_smoothing"],
     }
 

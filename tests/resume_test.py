@@ -59,7 +59,8 @@ def run(tmp, out, extra):
            "--lora_rank", "4", "--lora_alpha", "8", "--val_md5_percentile", str(VAL_PCT),
            "--seed", "7"] + extra
     out.mkdir(parents=True, exist_ok=True)
-    r = subprocess.run(cmd, cwd=_common.CODE, capture_output=True, text=True)
+    r = subprocess.run(cmd, cwd=_common.CODE, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
     assert r.returncode == 0, r.stdout[-2000:] + r.stderr[-3000:]
 
 
@@ -72,7 +73,7 @@ def main():
         tmp = Path(t)
         make_data(tmp / "data")
         make_weights(tmp / "dino.safetensors")
-        ms = yaml.safe_load(open(f"{_common.CODE}/configs/bfree_dcs.yaml"))
+        ms = yaml.safe_load(open(f"{_common.CODE}/configs/bfree_dcs.yaml", encoding="utf-8"))
         ms["multi_severity"]["enabled"] = True
         yaml.safe_dump(ms, open(tmp / "ms.yaml", "w"))
 
