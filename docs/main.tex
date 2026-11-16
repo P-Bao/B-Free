@@ -1,0 +1,465 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{fontspec}
+\setmainfont{Latin Modern Roman}
+\setsansfont{Latin Modern Sans}
+\setmonofont{Latin Modern Mono}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs,array,graphicx,xcolor,caption,enumitem,microtype,tabularx,float}
+\usepackage[hidelinks]{hyperref}
+\usepackage{url}
+\captionsetup{font=small,labelfont=bf}
+\renewcommand{\tablename}{Bảng}\renewcommand{\figurename}{Hình}\renewcommand{\contentsname}{Mục lục}\renewcommand{\abstractname}{Tóm tắt}\renewcommand{\refname}{Tài liệu tham khảo}\renewcommand{\appendixname}{Phụ lục}
+\setlist{itemsep=2pt,topsep=4pt}
+\setlength{\parskip}{3pt}
+\newcommand{\code}[1]{\texttt{\detokenize{#1}}}
+\renewcommand{\arraystretch}{1.15}
+\newcommand{\fig}[4]{%
+  \begin{figure}[htbp]\centering
+  \IfFileExists{figs/#1}{\includegraphics[width=#3\linewidth]{figs/#1}}{%
+    \fbox{\parbox{0.85\linewidth}{\centering\vspace{2em}\textbf{[Thiếu hình]} \code{figs/#1}\vspace{2em}}}}
+  \caption{#2}\label{#4}
+  \end{figure}}
+
+\title{\textbf{DINOv2-LoRA: Phát hiện ảnh AI trên mạng xã hội}}
+\author{}
+\date{09 tháng 11 năm 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+\noindent Bộ phát hiện ảnh do mô hình khuếch tán sinh ra thường suy giảm khi ảnh đã bị nền tảng mạng xã hội nén hoặc đổi cỡ. Chúng tôi trình bày một bộ phát hiện dựa trên DINOv2 ViT-B/14 (có register token) thích ứng bằng LoRA, huấn luyện theo công thức B-Free (cặp ảnh thật/giả cùng nội dung, tăng cường dữ liệu trực tuyến) kèm dữ liệu AI-GenBench, cùng một giao thức đánh giá thống nhất (5 crop, trung bình logit, điểm lưu theo ảnh) để so sánh công bằng với mô hình B-Free công bố. Mô hình cuối (S7) được huấn luyện với ba seed và đánh giá bằng paired bootstrap trên ba benchmark nằm ngoài dữ liệu huấn luyện. Trên ITW-SM và WildRF, AUC macro của S7 cao hơn lần lượt $0{,}0123$ ($0{,}9533$ so với $0{,}9410$) và $0{,}0105$ ($0{,}9929$ so với $0{,}9823$) với khoảng tin cậy 95\% không chứa $0$; trên B-Free viral images, chênh lệch $+0{,}0036$ có khoảng tin cậy $[-0{,}0062;+0{,}0130]$ nên chưa kết luận được. Ở ngưỡng quyết định cố định, S7 có độ đặc hiệu cao hơn nhưng độ nhạy thấp hơn B-Free trên hai trong ba benchmark. Chúng tôi cũng khảo sát các module lấy cảm hứng từ GlobalForge~\cite{cui2026globalforge} bằng một thang thí nghiệm từng bậc; trong cài đặt của chúng tôi chúng chưa cho thấy lợi ích rõ ràng. Báo cáo nêu rõ phạm vi kết luận và các nguồn bất định trong Thảo luận.
+
+\medskip\noindent\textbf{Từ khóa:} phát hiện ảnh do AI sinh, DINOv2, LoRA, B-Free, ảnh mạng xã hội, paired bootstrap.
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=========================================================
+\section{Giới thiệu}
+Các mô hình khuếch tán~\cite{rombach2022highresolution} sinh ra ảnh đủ chân thực để lan truyền rộng rãi trên mạng xã hội. \emph{Phát hiện ảnh do AI sinh} là bài toán phân loại nhị phân một ảnh là thật hay giả. Khó khăn chính nằm ở \emph{khái quát hóa}: bộ phát hiện phải hoạt động trên ảnh từ generator chưa từng thấy và trên ảnh đã qua xử lý của nền tảng (nén, đổi cỡ), gọi là ảnh ``in-the-wild''. Vì vậy các benchmark gần đây thu ảnh trực tiếp từ mạng xã hội~\cite{cavia2024realtime,konstantinidou2026navigating,guillaro2025bfree} hoặc gom nhiều generator~\cite{pellegrini2025aigenbench}.
+
+B-Free~\cite{guillaro2025bfree} giảm thiên lệch nội dung giữa hai lớp bằng cách sinh ảnh giả từ Stable Diffusion 2.1 có điều kiện trên chính ảnh thật tương ứng, nên mỗi cặp (thật, giả) cùng nội dung, và kết hợp tăng cường dữ liệu mạnh. Chúng tôi xây dựng một bộ phát hiện trên cùng họ dữ liệu và backbone nhưng thích ứng bằng LoRA~\cite{hu2022lora} và bổ sung dữ liệu AI-GenBench, rồi hỏi hệ thống này đạt mức nào so với B-Free trên ảnh mạng xã hội.
+
+Việc so sánh công bằng cần xử lý hai nguồn nhiễu: công thức huấn luyện (tăng cường, dữ liệu bổ sung) và giao thức đánh giá (cách cắt ảnh, gộp điểm, ngưỡng). Vì vậy chúng tôi (i) đánh giá mọi mô hình bằng cùng một chương trình, lưu điểm theo từng ảnh để tính khoảng tin cậy và kiểm định paired; và (ii) xây dựng mô hình theo một thang thí nghiệm từng bậc, mỗi bậc đổi một nhóm biến, để biết thành phần nào đáng giữ.
+
+\textbf{Câu hỏi nghiên cứu.} \textbf{RQ1}: hệ thống DINOv2 + LoRA huấn luyện theo công thức B-Free cộng AI-GenBench đạt mức nào so với B-Free trên ảnh mạng xã hội? \textbf{RQ2}: các module lấy cảm hứng từ GlobalForge~\cite{cui2026globalforge} (LIB, GSR, DCS) có cải thiện đo được khi được thêm có kiểm soát vào công thức nền?
+
+\textbf{Đóng góp.}
+\begin{enumerate}
+  \item Một bộ phát hiện DINOv2 + LoRA và công thức huấn luyện đầy đủ (dữ liệu, tăng cường, siêu tham số), kèm ba seed (Mục~\ref{sec:method}).
+  \item Một giao thức đánh giá thống nhất cho cả mô hình của chúng tôi và B-Free, kèm kiểm định paired bootstrap có hiệu chỉnh đa so sánh (Mục~\ref{sec:protocol}).
+  \item Kết quả trên ba benchmark ngoài phân phối huấn luyện, gồm cả hành vi tại ngưỡng cố định (Mục~\ref{sec:results}).
+  \item Một khảo sát từng bậc các module bổ trợ, kèm báo cáo trung thực về những gì chưa được chứng minh (Mục~\ref{sec:discussion}).
+\end{enumerate}
+\paragraph{Cấu trúc.} Mục~\ref{sec:related} điểm lại cơ sở; Mục~\ref{sec:problem} định nghĩa bài toán và các chỉ số; Mục~\ref{sec:method} mô tả phương pháp; Mục~\ref{sec:setup} và~\ref{sec:protocol} nêu thiết lập và giao thức đánh giá; Mục~\ref{sec:results} trình bày kết quả; Mục~\ref{sec:discussion}--\ref{sec:conclusion} thảo luận, nêu tính hợp lệ và kết luận.
+
+%=========================================================
+\section{Cơ sở và công trình liên quan}\label{sec:related}
+
+\paragraph{Phát hiện ảnh do AI sinh và benchmark.} B-Free~\cite{guillaro2025bfree} là công thức huấn luyện và đồng thời là bộ ảnh viral thực tế dùng trong báo cáo này. AI-GenBench~\cite{pellegrini2025aigenbench,aigenbench2025software} là benchmark nhiều generator, chúng tôi dùng làm nguồn dữ liệu huấn luyện bổ sung. WildRF~\cite{cavia2024realtime} gồm ảnh thật/giả thu từ Facebook, Reddit và Twitter, đặt trong bối cảnh phát hiện deepfake ngoài thực tế. ITW-SM~\cite{konstantinidou2026navigating} gồm $10\,000$ ảnh từ bốn nền tảng và phân tích những yếu tố quan trọng khi phát hiện ngoài thực tế.
+
+\paragraph{Mô hình sinh.} Mô hình khuếch tán tiềm ẩn~\cite{rombach2022highresolution} sinh ảnh từ nhiễu trong không gian nén; Stable Diffusion 2.1 là generator dùng để tạo ảnh giả trong dữ liệu B-Free.
+
+\paragraph{Backbone và thích ứng.} Vision Transformer (ViT)~\cite{dosovitskiy2021image} chia ảnh thành các \emph{patch} (ở đây $14\times14$ điểm ảnh) và xử lý chuỗi token bằng self-attention. DINOv2~\cite{oquab2023dinov2} là bộ trọng số ViT tiền huấn luyện tự giám sát. \emph{Register token}~\cite{darcet2024vision} là các token phụ thêm vào chuỗi để giảm artefact trong bản đồ attention (ở đây 4 token). LoRA~\cite{hu2022lora} đóng băng trọng số gốc $W$ và chỉ học một cập nhật hạng thấp $\Delta W=\tfrac{\alpha}{r}BA$ với hạng $r$, rất ít tham số.
+
+\paragraph{Học tương phản.} Hàm mất mát InfoNCE~\cite{oord2018representation} kéo các cặp ``dương'' lại gần nhau và đẩy các cặp ``âm'' ra xa trong không gian đặc trưng; DCS (Mục~\ref{sec:modules}) là một biến thể của dạng này.
+
+\paragraph{GlobalForge.} GlobalForge~\cite{cui2026globalforge} lập luận rằng nhiều bộ phát hiện quá khớp với các vết cục bộ do generator để lại, vốn dễ bị phá bởi nén JPEG, làm mờ hoặc đổi cỡ ảnh, và đề xuất chuyển căn cứ quyết định sang cấu trúc toàn cục. Họ dùng hai module trên đặc trưng của backbone: \emph{Local Information Bottleneck} (LIB) làm mượt đặc trưng để triệt thành phần tần số cao cục bộ, và \emph{Global Structural Reasoning} (GSR) ép mỗi token chỉ thu thập thông tin từ vùng ở xa; cả hai được huấn luyện cùng một loss tương phản \emph{Degradation-aware Contrastive Structural} (DCS) giữa ảnh sạch và ảnh suy giảm. Trong thiết lập của họ (backbone ViT-L, huấn luyện trên bộ dữ liệu ghép cặp ảnh thật và ảnh tái tạo bằng VAE), AUC không được báo cáo, nhưng balanced accuracy trung bình trên các benchmark ngoài thực tế tăng từ $80{,}21\%$ (không module) lên $85{,}93\%$ (đủ ba thành phần). Chúng tôi không tái hiện nguyên bản GlobalForge mà cài đặt lại ba thành phần này trên backbone ViT-B/14 của mình (Mục~\ref{sec:modules}), nên báo cáo này không kiểm chứng các kết quả của họ trong thiết lập gốc.
+
+%=========================================================
+\section{Bài toán và ký hiệu}\label{sec:problem}
+
+\subsection{Định nghĩa}
+Cho ảnh $x$ với nhãn $y\in\{0,1\}$ ($0$: thật, $1$: giả). Mô hình cho hai điểm thô (\emph{logit}) $\ell_0(x),\ell_1(x)$; \emph{điểm giả} là
+\begin{equation}
+\label{eq:score}
+z(x)=\ell_1(x)-\ell_0(x),\qquad p_{\text{giả}}(x)=\sigma\big(z(x)\big)=\frac{1}{1+e^{-z(x)}}.
+\end{equation}
+Mô hình B-Free công bố chỉ có một logit, và ta lấy trực tiếp $z(x)$ bằng logit đó. Dự đoán tại ngưỡng cố định là $\hat y=\mathbb{1}[z>0]$, tương đương $p_{\text{giả}}>0{,}5$. Để thống nhất giữa các ảnh có kích thước khác nhau, mỗi ảnh được cắt thành $K=5$ crop $c_1,\dots,c_5$ (Mục~\ref{sec:protocol}) và điểm ảnh là trung bình logit
+\begin{equation}
+\label{eq:meanlogit}
+s(x)=\frac{1}{5}\sum_{k=1}^{5} z\big(c_k(x)\big).
+\end{equation}
+Mọi chỉ số trong báo cáo được tính từ $s(x)$.
+
+\subsection{Chỉ số đánh giá}
+\begin{itemize}
+  \item \textbf{AUC} (diện tích dưới đường ROC~\cite{hanley1982meaning}): xác suất một ảnh giả được chấm điểm cao hơn một ảnh thật chọn ngẫu nhiên. Không phụ thuộc ngưỡng; $0{,}5$ là ngẫu nhiên, $1$ là phân tách hoàn hảo. \textbf{AP}: diện tích dưới đường precision--recall~\cite{davis2006relationship}.
+  \item \textbf{TPR} (độ nhạy trên ảnh giả) $=\Pr(\hat y=1\mid y=1)$; \textbf{TNR} (độ đặc hiệu trên ảnh thật) $=\Pr(\hat y=0\mid y=0)$, cả hai tại ngưỡng $s=0$.
+  \item \textbf{bAcc@0.5} (balanced accuracy~\cite{brodersen2010balanced}) $=\tfrac12(\text{TPR}+\text{TNR})$ tại ngưỡng $s=0$ ($p=0{,}5$). Cân bằng giữa hai lớp nên không bị ảnh hưởng bởi số ảnh thật và giả chênh nhau. Đây là chỉ số ngưỡng cố định chính; chúng tôi không chọn ngưỡng trên tập kiểm tra.
+  \item \textbf{EER} (equal error rate~\cite{ross2003information}): tỉ lệ lỗi tại ngưỡng mà tỉ lệ dương giả bằng tỉ lệ âm giả; thấp hơn là tốt hơn, cũng không phụ thuộc ngưỡng cố định.
+\end{itemize}
+Giao thức còn định nghĩa Expected Calibration Error~\cite{guo2017calibration} và NLL cân bằng lớp, \texttt{Pd@10\%FAR} và \texttt{FPR@95\%TPR}; các chỉ số này \emph{không} được xuất trong các bảng tổng hợp cuối nên báo cáo không đưa số cho chúng.
+
+\subsection{Cách tổng hợp qua các subset}
+Mỗi benchmark gồm một hoặc nhiều \emph{subset} (nền tảng mạng xã hội). \textbf{Macro} là trung bình số học của chỉ số trên các subset (mỗi nền tảng có trọng số bằng nhau); \textbf{pooled} là chỉ số tính trên toàn bộ ảnh gộp lại (nền tảng có nhiều ảnh hơn có trọng số lớn hơn). Với B-Free viral images chỉ có một subset nên hai cách trùng nhau.
+
+\subsection{So sánh có kiểm định}
+Với ảnh được lấy mẫu có hoàn lại (bootstrap~\cite{efron1986bootstrap}), ta ước lượng phân phối của hiệu số
+\begin{equation}
+\Delta\text{AUC}=\overline{\text{AUC}}_{\text{S7}}-\text{AUC}_{\text{B-Free}},
+\end{equation}
+trong đó $\overline{\text{AUC}}_{\text{S7}}$ là trung bình AUC của ba seed. ``Paired'' nghĩa là cùng một tập ảnh được lấy mẫu cho cả bốn mô hình, nên hiệu số phản ánh sự khác biệt giữa mô hình chứ không phải khác biệt do chọn ảnh. Khoảng tin cậy (CI) 95\% là hai phân vị $2{,}5\%$ và $97{,}5\%$ của phân phối bootstrap. Nếu CI không chứa $0$, chênh lệch được coi là có ý nghĩa thống kê; ngược lại ghi \emph{n.s.} (not significant).
+
+%=========================================================
+\section{Phương pháp}\label{sec:method}
+
+\subsection{Kiến trúc mô hình}
+\textbf{Backbone}: ViT-B/14 với 4 register token, khởi tạo từ DINOv2~\cite{oquab2023dinov2,darcet2024vision,dosovitskiy2021image}. Ảnh đầu vào $504\times504$ chia thành lưới $36\times36=1296$ patch. \textbf{LoRA}~\cite{hu2022lora}: hạng $r=16$, $\alpha=32$ (hệ số tỉ lệ $\alpha/r=2$), dropout $0{,}05$, áp dụng cho các phép chiếu \texttt{qkv}, \texttt{proj}, \texttt{fc1}, \texttt{fc2} của 12 khối và cho lớp \texttt{patch\_embed.proj} (tổng 49 lớp); trước khi đánh giá, các cập nhật LoRA được gộp vào trọng số gốc. \textbf{Head}: đặc trưng là \emph{token CLS} (token tổng hợp toàn ảnh) qua chuẩn hóa và một lớp tuyến tính cho hai logit, như B-Free.
+
+\subsection{Dữ liệu huấn luyện}
+Dữ liệu nền là bộ B-Free~\cite{guillaro2025bfree}: ảnh thật \texttt{COCO\_real\_512} và 6 biến thể ảnh giả sinh bằng Stable Diffusion 2.1~\cite{rombach2022highresolution}. Mỗi ảnh thật gốc được gọi là một \emph{stem}. Log huấn luyện ghi $51\,517$ stem, chia theo MD5 thành $50\,083$ stem huấn luyện và $1\,434$ stem validation ($\approx3\%$)~\cite{baopv051_2025_xla_training_s1}. Trong chế độ \emph{paired} (ghép cặp), mỗi stem tạo một cặp gồm ảnh thật và một biến thể giả có cùng nội dung, cho $100\,166$ mẫu. Mọi bậc còn dùng thêm một nguồn bổ sung nhỏ ($683$ thật, $2\,052$ giả ở phần train), nên S1 và S2 có $102\,901$ mẫu; log không nêu tên nguồn này.
+
+Từ S3, thêm AI-GenBench~\cite{pellegrini2025aigenbench,aigenbench2025software} (tham số \texttt{other\_frac}$=0{,}25$): 13 generator, $46\,800$ ảnh thật và $46\,800$ ảnh giả cho huấn luyện (tối đa $4\,000$ ảnh mỗi generator), cùng $5\,200+5\,200$ ảnh giữ lại cho validation~\cite{baopv051_2025_xla_training_s3}. Tổng số mẫu từ S3 là $196\,501$.
+
+\paragraph{Tăng cường dữ liệu trực tuyến.} Từ S2, mỗi ảnh được biến đổi ngẫu nhiên khi huấn luyện (preset \texttt{bfree}, xác suất áp dụng $0{,}9$): nén JPEG, làm mờ, đổi kích thước, nhiễu, biến đổi màu và che khối (cutout). Mục đích là mô phỏng những gì nền tảng làm với ảnh. \emph{Lưu ý quan trọng:} log huấn luyện ghi các tham số của preset này là giá trị tạm (placeholder), chưa đối chiếu với phụ lục của B-Free; do đó đây là tăng cường ``kiểu B-Free'', không phải bản sao chính xác.
+
+\subsection{Hàm mất mát và tối ưu hóa}
+\begin{sloppypar}
+Hàm mất mát là cross-entropy (CE)~\cite{goodfellow2016deep} thuần trên hai logit, không làm trơn nhãn (\texttt{label\_smoothing}$=0$), khớp với BCE của B-Free; riêng S6 thêm số hạng DCS. Tối ưu bằng AdamW~\cite{loshchilov2019decoupled}, learning rate $10^{-4}$, weight decay $10^{-4}$, lịch cosine~\cite{loshchilov2017sgdr} (mức tối thiểu $10^{-7}$), cắt gradient ở $1{,}0$, độ chính xác hỗn hợp BF16. Batch size được dò tự động với trần $128$ (kết quả: $128$ ở mọi lần chạy trừ S6 chỉ $86$ do cần nhiều bộ nhớ hơn). Mỗi bậc S1--S6 huấn luyện 2 epoch, seed 42; S7 huấn luyện 6 epoch với seed 42, 54, 68~\cite{baopv051_2025_xla_training_s7_seed_42,baopv051_2025_xla_training_s7_seed_54,baopv051_2025_xla_training_s7_seed_68}. Một \emph{epoch} là một lượt qua toàn bộ tập huấn luyện.
+\end{sloppypar}
+
+\subsection{Module bổ trợ lấy cảm hứng từ GlobalForge}\label{sec:modules}
+Mục này tóm tắt ba thành phần theo GlobalForge~\cite{cui2026globalforge} và nêu rõ chỗ chúng tôi cài đặt khác. Gọi $\mathbf{X}\in\mathbb{R}^{B\times d\times h\times w}$ là bản đồ đặc trưng của các token patch cuối ($B$: batch, $d$: số kênh, $h\times w$: lưới patch).
+
+\paragraph{LIB (Local Information Bottleneck).} LIB trộn đặc trưng gốc với bản làm mượt Gaussian $k\times k$ ($\sigma=k/3$, tích chập theo từng kênh):
+\begin{equation}
+\hat{\mathbf{X}}=(1-\alpha)\,\mathbf{X}+\alpha\,\mathbf{X}_{\text{smooth}},\qquad \alpha=\sigma(\beta),
+\end{equation}
+với $\beta$ là một tham số vô hướng học được. Làm mượt là bộ lọc thông thấp, giảm thành phần tần số cao nơi tập trung vết cục bộ (lưới upsampling, nhiễu dư), trong khi giữ thông tin cấu trúc tần số thấp. Khi $\alpha\to0$ đầu ra trở về đặc trưng gốc.
+
+\paragraph{GSR (Global Structural Reasoning).} GSR là một lớp self-attention với mặt nạ cục bộ. Với ma trận điểm attention $\mathbf{S}=(\hat{\mathbf{F}}\mathbf{W}_q)(\hat{\mathbf{F}}\mathbf{W}_k)^{\top}/\sqrt{d}$ trên chuỗi token $\hat{\mathbf{F}}$, các phần tử có khoảng cách Chebyshev giữa hai vị trí patch không quá $w_{\text{gsr}}$ bị đặt bằng $-\infty$ trước softmax:
+\begin{equation}
+\tilde{S}_{u,v}=\begin{cases}-\infty,& d_{\text{Cheb}}(u,v)\le w_{\text{gsr}},\\ S_{u,v},&\text{ngược lại,}\end{cases}\qquad
+\mathbf{F}_{\text{GSR}}=\text{Proj}\big(\text{softmax}(\tilde{\mathbf{S}})\,\hat{\mathbf{F}}\mathbf{W}_v\big)+\hat{\mathbf{F}}.
+\end{equation}
+Nhờ mặt nạ, mỗi token chỉ cập nhật từ vùng ở xa, nên mô hình buộc phải tích hợp thông tin liên vùng thay vì dựa vào tương quan giữa các patch kề nhau. $d_{\text{Cheb}}(u,v)=\max(|u_x-v_x|,|u_y-v_y|)$. GlobalForge mặc định $w_{\text{gsr}}=3$ và xác suất che $1{,}0$.
+
+\paragraph{DCS (Degradation-aware Contrastive Structural loss).} Với mỗi ảnh $I_i$, một phiên bản suy giảm $\tilde I_i$ được sinh trực tuyến, và hai biểu diễn classifier tương ứng là $\mathbf{z}_i,\tilde{\mathbf{z}}_i$; ở cài đặt S6 của chúng tôi, mã lấy đặc trưng CLS token. GlobalForge dùng InfoNCE~\cite{oord2018representation} đối xứng, với nhiệt độ $\kappa$ và $\mathrm{sim}$ là độ tương đồng cosine, trong đó mọi mẫu khác trong batch là ``âm'':
+\begin{equation}
+\mathcal{L}_{\text{DCS}}=-\frac{1}{2B}\sum_{i=1}^{B}\Big[\log\tfrac{e^{\mathrm{sim}(\mathbf{z}_i,\tilde{\mathbf{z}}_i)/\kappa}}{\sum_j e^{\mathrm{sim}(\mathbf{z}_i,\tilde{\mathbf{z}}_j)/\kappa}}+\log\tfrac{e^{\mathrm{sim}(\tilde{\mathbf{z}}_i,\mathbf{z}_i)/\kappa}}{\sum_j e^{\mathrm{sim}(\tilde{\mathbf{z}}_i,\mathbf{z}_j)/\kappa}}\Big],
+\end{equation}
+và tổng mất mát là $\mathcal{L}=\mathcal{L}_{\text{cls}}+\lambda_{\text{dcs}}\mathcal{L}_{\text{DCS}}$ với $\lambda_{\text{dcs}}=0{,}01$ trong GlobalForge.
+
+\paragraph{Cài đặt của chúng tôi.} (i) Backbone là ViT-B/14 với lưới $36\times36$ patch. Để giữ tỉ lệ token bị che gần với mặc định của GlobalForge (cửa sổ $3$ trên lưới $16\times16$, tức $49/256\approx19{,}1\%$ nếu coi lưới này ứng với ảnh $224$ px), chúng tôi dùng $w_{\text{gsr}}=7$ ($15^2/36^2\approx17{,}4\%$). (ii) Ở S6, chúng tôi dùng một biến thể \emph{class-aware}: ảnh dương của $z_i$ là $\tilde z_i$, còn âm chỉ gồm $\tilde z_j$ khác lớp ($y_j\neq y_i$), trong đó ảnh giả cùng stem là âm khó vì cùng nội dung:
+\begin{equation}
+\mathcal{L}_i=-\log\frac{\exp(s_{ii}/\tau)}{\exp(s_{ii}/\tau)+\sum_{j:\,y_j\neq y_i}\exp(s_{ij}/\tau)},\qquad s_{ij}=\mathrm{sim}(\mathbf{z}_i,\tilde{\mathbf{z}}_j).
+\end{equation}
+Chúng tôi đặt $\tau=0{,}07$, $\lambda_{\text{DCS}}=0{,}1$ (lớn hơn $0{,}01$ của GlobalForge) và dùng hai view (sạch và tăng cường), nhằm tránh kéo ảnh thật về phía ảnh giả và để số hạng DCS đóng góp gradient so được với CE~\cite{baopv051_2025_xla_training_s6}.
+
+\subsection{Tóm tắt siêu tham số}
+\begin{table}[htbp]\centering\small
+\caption{Siêu tham số huấn luyện (chung cho S1--S7 trừ khi ghi khác).}\label{tab:hp}
+\begin{tabularx}{\linewidth}{lX}
+\toprule
+Thành phần & Giá trị \\
+\midrule
+Ảnh đầu vào & $504\times504$, patch $14$ (lưới $36\times36$) \\
+LoRA & $r=16$, $\alpha=32$, dropout $0{,}05$, 49 lớp \\
+Tối ưu & AdamW, learning rate $10^{-4}$, weight decay $10^{-4}$, cosine (mức tối thiểu $10^{-7}$) \\
+Ổn định & cắt gradient $1{,}0$, BF16, không làm trơn nhãn \\
+Batch & tự dò, trần $128$ (S6: $86$) \\
+Epoch / seed & S1--S6: 2 epoch, seed 42; S7: 6 epoch, seed 42, 54, 68 \\
+Tăng cường & từ S2, xác suất $0{,}9$ (tham số placeholder) \\
+Số mẫu huấn luyện & S1--S2: $102\,901$; S3--S7: $196\,501$ \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\subsection{Thang thí nghiệm từng bậc}
+\begin{table}[htbp]\centering\small
+\caption{Thang thí nghiệm từng bậc (S1--S3, S6--S7). ``Huấn luyện'' và ``đánh giá'' cho biết phần nào có dữ liệu trong báo cáo.}\label{tab:ladder}
+\begin{tabularx}{\linewidth}{l X l l}
+\toprule
+Bậc & Thay đổi so với nền & Huấn luyện & Đánh giá \\
+\midrule
+S1 & Nền: DINOv2 + LoRA, head CLS, CE sạch, không tăng cường, không AI-GenBench & có & không \\
+S2 & + tăng cường dữ liệu trực tuyến kiểu B-Free & có & không \\
+S3 & + AI-GenBench & có & trung gian \\
+S6 & S3 + DCS lớp-nhận-biết & có & trung gian \\
+S7 & Công thức S3 huấn luyện 6 epoch, 3 seed & có & cuối \\
+\bottomrule
+    \end{tabularx}
+    \end{table}
+    \noindent S4 và S5 đã được loại khỏi thang so sánh vì S4 không chạy và S5 lỗi nạp mô hình.
+Mỗi bậc chỉ đổi một nhóm biến; các thiết lập còn lại giữ như cấu hình gốc của repo. Công thức dùng cho S7 được chọn từ kết quả S3 và S6 (Mục~\ref{sec:interim}); S7 do đó không chứa LIB/GSR hay DCS.
+
+%=========================================================
+\section{Thiết lập thực nghiệm}\label{sec:setup}
+
+\subsection{Dữ liệu đánh giá}
+\begin{table}[htbp]\centering\small
+\caption{Benchmark dùng trong kết quả chính. Cả ba đều nằm ngoài dữ liệu huấn luyện.}\label{tab:bench}
+\begin{tabularx}{\linewidth}{l r r r r X}
+\toprule
+Benchmark & Số ảnh & Thật & Giả & Subset & Nguồn \\
+\midrule
+ITW-SM~\cite{konstantinidou2026navigating} & 10\,000 & 5\,000 & 5\,000 & 4 & Facebook, Instagram, LinkedIn, X; phần test từ Hugging Face \\
+WildRF~\cite{cavia2024realtime} & 2\,503 & 1\,251 & 1\,252 & 3 & Facebook, Reddit, Twitter; split test \\
+B-Free viral~\cite{guillaro2025bfree} & 785 & 269 & 516 & 1 & Ảnh viral thực tế \\
+\bottomrule
+\end{tabularx}
+\end{table}
+Số ảnh thật/giả theo subset của ITW-SM: Facebook $1\,318/1\,033$, Instagram $1\,206/2\,179$, LinkedIn $1\,269/931$, X $1\,207/857$. WildRF: Facebook $320$, Reddit $1\,500$, Twitter $683$ ảnh. Cả ba benchmark dùng kích thước $504$ px và chỉ ở điều kiện ``clean'' (không thêm suy giảm).
+
+\subsection{Mô hình so sánh}
+\textbf{S7} gồm ba checkpoint (seed 42, 54, 68). \textbf{B-Free official} là trọng số công bố (kiến trúc \texttt{vit\_base\_patch14\_reg4\_dinov2}, một logit). So sánh này ở cấp \emph{hệ thống}: hai bên khác nhau về dữ liệu và công thức huấn luyện (S7 dùng thêm AI-GenBench, LoRA, 6 epoch), nên kết quả không cô lập được riêng một yếu tố.
+
+\subsection{Chọn mô hình và nguyên tắc tránh dò tập kiểm tra}
+Checkpoint của mỗi seed S7 được chọn theo bAcc trên validation tách từ dữ liệu huấn luyện, không dùng ITW-SM, WildRF hay B-Free viral: epoch 6 với seed 42 và 68, epoch 5 với seed 54 (epoch 6 có bAcc bằng nhau). Công thức S7 được chọn sau khi chấm điểm S3 và S6 trên AI-GenBench (validation), WildRF và B-Free viral; ITW-SM không tham gia việc chọn này. Điểm này được thảo luận lại ở Mục~\ref{sec:discussion}.
+
+\subsection{Khả năng tái lập}
+\begin{sloppypar}
+Notebook \code{xla-setup} đóng gói môi trường, DINOv2 reg4 và mã nguồn nhánh \code{integration/loss-backbone}~\cite{baopv051_2025_xla_setup}. Các notebook huấn luyện và đánh giá (\code{xla-training-s1} đến \code{-s7-seed-68}, \code{xla-eval-s3-6}, \code{xla-eval-final-stage-1}, \code{xla-eval-final-merged}) lần lượt là nguồn cấu hình và kết quả của báo cáo~\cite{baopv051_2025_xla_training_s1,baopv051_2025_xla_training_s2,baopv051_2025_xla_training_s3,baopv051_2025_xla_training_s5,baopv051_2025_xla_training_s6,baopv051_2025_xla_training_s7_seed_42,baopv051_2025_xla_training_s7_seed_54,baopv051_2025_xla_training_s7_seed_68,baopv051_2025_xla_eval_s3_6,baopv051_2025_xla_eval_final_stage_1,baopv051_2025_xla_eval_final_merged}. Các CSV kết quả được đặt trong \code{notebooks/FINAL/results/}. Mọi bảng trong báo cáo được sinh trực tiếp từ nguồn này. Điểm số được lưu theo từng ảnh nên có thể tính lại khoảng tin cậy và kiểm định.
+\end{sloppypar}
+
+\section{Giao thức đánh giá}\label{sec:protocol}
+\paragraph{Cắt ảnh và gộp điểm.} Mỗi ảnh được cắt thành 5 crop $504\times504$ (một ở tâm, bốn ở góc, căn theo lưới patch $14$). Ảnh nhỏ hơn $504$ được lát lặp thay vì phóng to nội suy. Mỗi crop cho một logit và điểm ảnh là trung bình 5 logit (công thức trong Mục~\ref{sec:problem}). Cùng một chương trình đánh giá, cùng cách cắt và cách gộp được áp dụng cho S7 và B-Free, và gộp trên logit (không gộp trên xác suất) để các chỉ số nhất quán.
+
+\paragraph{Khoảng tin cậy.} CI 95\% của AUC từng mô hình/subset dùng $300$ mẫu bootstrap. Hiệu số $\Delta$AUC dùng $1\,000$ mẫu paired bootstrap, phân tầng theo lớp thật/giả và theo subset; macro $\Delta$AUC là trung bình $\Delta$AUC các subset, pooled là $\Delta$AUC trên ảnh gộp. CI này chỉ phản ánh biến động do chọn ảnh; biến động giữa các seed được báo cáo riêng bằng độ lệch chuẩn (chia cho $3$, không hiệu chỉnh mẫu nhỏ).
+
+\paragraph{Kiểm định.} $p_{\text{boot}}$ là p-value hai phía từ phân phối bootstrap. Với $8$ subset thuộc cả ba benchmark, p-value được hiệu chỉnh đa so sánh bằng phương pháp Benjamini--Hochberg~\cite{benjamini1995controlling}, cho $q_{\text{BH}}$ (kiểm soát tỉ lệ phát hiện sai). Trong dữ liệu này, mọi subset có CI loại $0$ đều có $q_{\text{BH}}<0{,}05$ và ngược lại.
+
+\paragraph{Chạy thực tế.} Toàn bộ $13\,288$ ảnh được chấm điểm bởi một chương trình duy nhất, độ chính xác fp16 trên hai GPU T4, mất khoảng $0{,}95$ giờ và không có ảnh lỗi. Đánh giá trung gian (Mục~\ref{sec:interim}) dùng một lần chạy riêng.
+
+%=========================================================
+\section{Kết quả}\label{sec:results}
+
+\subsection{Quá trình huấn luyện}
+\begin{table}[htbp]\centering\small
+\caption{Tóm tắt các lần huấn luyện. ``Val bAcc'' là giá trị tốt nhất qua các epoch trên validation của chính lần chạy đó.}\label{tab:train}
+\begin{tabular}{lcrcccrr}
+\toprule
+Lần chạy & Epoch & Mẫu train & Batch & Val bAcc & Val AUC & $\Delta$bAcc vs S1 & $\Delta$AUC vs S1 \\
+\midrule
+S1 & 2 & 102\,901 & 128 & 0,9990 & 1,0000 & --- & --- \\
+S2 & 2 & 102\,901 & 128 & 0,9460 & 0,9910 & $-0,0530$ & $-0,0090$ \\
+S3 & 2 & 196\,501 & 128 & 0,9515 & 0,9918 & $-0,0475$ & $-0,0082$ \\
+S6 & 2 & 196\,501 & 86 & 0,9554 & 0,9929 & $-0,0436$ & $-0,0071$ \\
+S7 seed 42 & 6 & 196\,501 & 128 & 0,9686 & 0,9970 & $-0,0304$ & $-0,0030$ \\
+S7 seed 54 & 6 & 196\,501 & 128 & 0,9704 & 0,9967 & $-0,0286$ & $-0,0033$ \\
+S7 seed 68 & 6 & 196\,501 & 128 & 0,9686 & 0,9970 & $-0,0304$ & $-0,0030$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+Hai cột chênh lệch cuối được tính trực tiếp từ giá trị validation tốt nhất theo epoch của các notebook train tương ứng, lấy S1 làm mốc so sánh. Tập validation khác nhau giữa các bậc (từ S3 có thêm phần giữ lại của AI-GenBench), S6 dùng batch nhỏ hơn, và S7 huấn luyện 6 epoch thay vì 2 epoch. Do đó, bảng này chỉ cung cấp một so sánh trực tiếp theo giá trị validation của từng notebook train, không phải so sánh cùng ngân sách huấn luyện và không phải kết quả kiểm tra.
+
+Validation của S1 bão hòa (AUC $1{,}0000$) nên không dùng để so sánh hay chọn mô hình. S3 và S6 có các giá trị validation khá gần nhau, do đó cần được đánh giá thêm trong một notebook riêng theo cùng giao thức trước khi rút ra so sánh về module.
+
+\subsection{Đánh giá trung gian S3 và S6}\label{sec:interim}
+Các checkpoint S3 và S6 (seed 42, 2 epoch) được chấm điểm để chọn công thức cho S7~\cite{baopv051_2025_xla_eval_s3_6}. S4 không chạy và S5 lỗi nạp mô hình, nên không dùng để so sánh hoặc chọn mô hình. S1 và S2 không được đánh giá~\cite{baopv051_2025_xla_training_s1,baopv051_2025_xla_training_s2}, do đó chưa có bằng chứng định lượng về riêng tác dụng của tăng cường dữ liệu và của AI-GenBench. SynthWildX bị bỏ qua ở cả hai lần chạy vì bộ nạp không suy được nhãn từ đường dẫn ảnh.
+
+\begin{table}[htbp]\centering\small
+\caption{S3 so với S6 (seed 42, một lần chạy, chưa có CI paired). AI-GenBench: 36 generator trên tập validation.}\label{tab:interim}
+\begin{tabular}{lcc}
+\toprule
+Chỉ số & S3 & S6 \\
+\midrule
+AI-GenBench, AUC pooled (toàn bộ, $n=19\,500$) & 0,8987 & 0,8754 \\
+WildRF, AUC macro & 0,9901 & 0,9915 \\
+B-Free viral, AUC & 0,9733 & 0,9779 \\
+\bottomrule
+\end{tabular}
+\end{table}
+S6 cao hơn S3 một chút trên WildRF ($+0{,}0014$) và B-Free viral ($+0{,}0046$) nhưng thấp hơn rõ trên AI-GenBench pooled ($-0{,}0233$). Kế hoạch thí nghiệm đặt trước tiêu chí để một module được giữ lại: AUC ngoài phân phối trung bình tăng tối thiểu $0{,}005$ và không tập nào giảm quá $0{,}01$. S6 không thỏa tiêu chí (mức giảm $0{,}0233$ trên AI-GenBench pooled), và đây chỉ là một seed. Notebook train lấy hết AI-GenBench; bản chia theo generator trong phiên bản trước khi chọn cách lấy một số generator là lỗi code, do đó không dùng để kết luận. Notebook không ghi lại lý do chính thức của việc chọn công thức S3 cho S7; các số trên là bằng chứng sẵn có.
+
+\subsection{Kết quả chính: S7 so với B-Free}
+\begin{table}[htbp]\centering\scriptsize
+\caption{AUC theo benchmark. S7: trung bình $\pm$ độ lệch chuẩn qua 3 seed. $\Delta$AUC kèm CI 95\% paired bootstrap.}\label{tab:auc}
+\resizebox{\linewidth}{!}{%
+\begin{tabular}{lrccccccc}
+\toprule
+ & & & \multicolumn{3}{c}{Macro} & \multicolumn{3}{c}{Pooled} \\
+\cmidrule(lr){4-6}\cmidrule(lr){7-9}
+Benchmark & $n$ & Subset & S7 & B-Free & $\Delta$AUC [CI 95\%] & S7 & B-Free & $\Delta$AUC [CI 95\%] \\
+\midrule
+ITW-SM & 10\,000 & 4 & $0{,}9533 \pm 0{,}0017$ & 0,9410 & $+0{,}0123$ $[+0{,}0079,\,+0{,}0167]$ & $0{,}9642 \pm 0{,}0013$ & 0,9547 & $+0{,}0095$ $[+0{,}0062,\,+0{,}0128]$ \\
+WildRF & 2\,503 & 3 & $0{,}9929 \pm 0{,}0011$ & 0,9823 & $+0{,}0105$ $[+0{,}0075,\,+0{,}0137]$ & $0{,}9909 \pm 0{,}0012$ & 0,9774 & $+0{,}0135$ $[+0{,}0095,\,+0{,}0177]$ \\
+B-Free viral & 785 & 1 & $0{,}9736 \pm 0{,}0039$ & 0,9700 & $+0{,}0036$ $[-0{,}0062,\,+0{,}0130]$ & $0{,}9736 \pm 0{,}0039$ & 0,9700 & $+0{,}0036$ $[-0{,}0062,\,+0{,}0130]$ \\
+\bottomrule
+\end{tabular}}
+\end{table}
+Trên ITW-SM và WildRF, S7 vượt B-Free ở cả hai cách tổng hợp, và CI của $\Delta$AUC đều không chứa $0$. Trên B-Free viral images, $\Delta$AUC $=+0{,}0036$ nhưng CI $[-0{,}0062;\,+0{,}0130]$ chứa $0$, nên không thể kết luận S7 khác B-Free ở benchmark này.
+
+\begin{table}[htbp]\centering\small
+\caption{AUC macro theo từng seed của S7.}\label{tab:seed}
+\begin{tabular}{lcccc}
+\toprule
+Benchmark & B-Free & Seed 42 & Seed 54 & Seed 68 \\
+\midrule
+ITW-SM & 0,9410 & 0,9526 & 0,9516 & 0,9556 \\
+WildRF & 0,9823 & 0,9915 & 0,9929 & 0,9942 \\
+B-Free viral & 0,9700 & 0,9712 & 0,9706 & 0,9791 \\
+\bottomrule
+\end{tabular}
+\end{table}
+Cả ba seed đều cao hơn B-Free trên ITW-SM và WildRF. Trên B-Free viral, các seed nằm quanh B-Free ($0{,}9706$--$0{,}9791$ so với $0{,}9700$), cho thấy độ biến động giữa seed (độ lệch chuẩn $0{,}0039$) lớn hơn so với chênh lệch trung bình ($0{,}0036$).
+
+\fig{macro_auc_by_benchmark.png}{AUC macro theo benchmark. Chấm nhỏ: từng seed của S7; chấm lớn kèm thanh sai số: trung bình $\pm$ độ lệch chuẩn qua 3 seed; hình thoi: B-Free.}{0.75}{fig:macro}
+
+\subsection{Phân tích theo subset}
+\begin{table}[htbp]\centering\scriptsize
+\caption{AUC và $\Delta$AUC theo từng subset. $p_{\text{boot}}$: p-value bootstrap; $q_{\text{BH}}$: sau hiệu chỉnh Benjamini--Hochberg trên 8 subset.}\label{tab:subset}
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{llccccrl}
+\toprule
+Benchmark & Subset & S7 (TB $\pm$ std) & B-Free & $\Delta$AUC [CI 95\%] & $p_{\text{boot}}$ & $q_{\text{BH}}$ & Kết luận \\
+\midrule
+ITW-SM & Facebook & 0,9861 $\pm$ 0,0024 & 0,9796 & $+0{,}0065$ $[+0{,}0021,\,+0{,}0110]$ & 0,0040 & 0,0107 & ours tốt hơn \\
+ITW-SM & Instagram & 0,9936 $\pm$ 0,0009 & 0,9903 & $+0{,}0033$ $[+0{,}0009,\,+0{,}0057]$ & 0,0100 & 0,0200 & ours tốt hơn \\
+ITW-SM & LinkedIn & 0,9180 $\pm$ 0,0029 & 0,8803 & $+0{,}0376$ $[+0{,}0267,\,+0{,}0492]$ & 0,0020 & 0,0080 & ours tốt hơn \\
+ITW-SM & X & 0,9154 $\pm$ 0,0039 & 0,9138 & $+0{,}0016$ $[-0{,}0113,\,+0{,}0135]$ & 0,7932 & 0,7932 & n.s. \\
+WildRF & Reddit & 0,9856 $\pm$ 0,0024 & 0,9593 & $+0{,}0264$ $[+0{,}0187,\,+0{,}0349]$ & 0,0020 & 0,0080 & ours tốt hơn \\
+WildRF & Facebook & 0,9952 $\pm$ 0,0016 & 0,9903 & $+0{,}0049$ $[+0{,}0005,\,+0{,}0102]$ & 0,0280 & 0,0448 & ours tốt hơn \\
+WildRF & Twitter & 0,9978 $\pm$ 0,0006 & 0,9974 & $+0{,}0004$ $[-0{,}0014,\,+0{,}0022]$ & 0,6773 & 0,7741 & n.s. \\
+B-Free viral & B-Free viral & 0,9736 $\pm$ 0,0048 & 0,9700 & $+0{,}0036$ $[-0{,}0062,\,+0{,}0130]$ & 0,4915 & 0,6553 & n.s. \\
+\bottomrule
+\end{tabular}
+\end{table}
+Ở ITW-SM, S7 tốt hơn rõ ở Facebook, Instagram và đặc biệt LinkedIn ($+0{,}0376$); ở X chênh lệch không có ý nghĩa. Ở WildRF, S7 tốt hơn ở Facebook và Reddit ($+0{,}0264$); Twitter không khác biệt (cả hai đã gần $1$). Tổng cộng $5/8$ subset S7 tốt hơn, $3/8$ n.s., và không subset nào S7 kém hơn.
+
+\fig{delta_auc_all.png}{$\Delta$AUC của S7 so với B-Free theo subset, kèm CI 95\% paired bootstrap. Xanh: CI loại $0$ (S7 tốt hơn); xám: n.s.}{0.85}{fig:delta}
+\fig{auc_dot_all.png}{AUC từng subset kèm CI 95\% (300 mẫu bootstrap), cho ba seed S7 và B-Free.}{0.85}{fig:dot}
+\fig{roc_pooled.png}{Đường ROC pooled theo benchmark (trục FPR theo thang log). Đường đứt nét: B-Free.}{1.0}{fig:roc}
+
+\subsection{Hành vi tại ngưỡng cố định}
+\begin{table}[htbp]\centering\small
+\caption{Chỉ số macro tại ngưỡng $s=0$ (S7 trung bình ba seed / B-Free).}\label{tab:thr}
+\begin{tabular}{llll}
+\toprule
+Benchmark & bAcc & TPR (giả) & TNR (thật) \\
+\midrule
+ITW-SM & 0,878 / 0,878 & 0,772 / 0,856 & 0,985 / 0,900 \\
+WildRF & 0,966 / 0,932 & 0,956 / 0,961 & 0,976 / 0,902 \\
+B-Free viral & 0,840 / 0,916 & 0,682 / 0,851 & 0,999 / 0,981 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\fig{thr_acc_all.png}{Độ chính xác trên ảnh thật (TNR) và ảnh giả (TPR) tại ngưỡng $s=0$, theo subset.}{0.95}{fig:thr}
+Tại ngưỡng cố định, S7 có TNR cao hơn B-Free trên cả ba benchmark nhưng TPR thấp hơn trên ITW-SM ($0{,}772$ so với $0{,}856$) và B-Free viral ($0{,}682$ so với $0{,}851$). Trên ITW-SM bAcc hai bên bằng nhau ($0{,}878$); trên WildRF S7 cao hơn ($0{,}966$ so với $0{,}932$); trên B-Free viral S7 thấp hơn ($0{,}840$ so với $0{,}916$) dù AUC tương đương, nghĩa là xếp hạng ảnh tốt ngang nhau nhưng ngưỡng $0$ không đặt đúng chỗ cho S7 trên tập này. Chúng tôi không dịch ngưỡng trên tập kiểm tra.
+
+%=========================================================
+\section{Thảo luận}\label{sec:discussion}
+
+\paragraph{RQ1: S7 so với B-Free.} Trên hai benchmark mạng xã hội lớn (ITW-SM, WildRF), S7 có AUC cao hơn B-Free một cách nhất quán qua ba seed và qua kiểm định paired; chênh lệch tuyệt đối khoảng $0{,}01$. Ở những nền tảng B-Free đã gần trần (WildRF-Twitter, AUC $\approx0{,}997$) không có chênh lệch đáng kể, trong khi ở nền tảng khó hơn (LinkedIn, Reddit) chênh lệch lớn nhất. Trên B-Free viral images (một subset, $785$ ảnh) không đủ bằng chứng, và đây cũng là benchmark do chính B-Free công bố. Vì hai hệ thống khác nhau về dữ liệu và công thức, chúng tôi không quy kết cải thiện cho riêng LoRA, AI-GenBench hay số epoch.
+
+\paragraph{Điểm vận hành.} AUC không phụ thuộc ngưỡng, còn bAcc@0.5 phụ thuộc. S7 chọn thận trọng hơn khi gán nhãn giả (TNR cao, TPR thấp), trong khi B-Free cân bằng hơn trên ảnh viral. Chẩn đoán bổ sung: EER trung bình của S7 trên B-Free viral là $0{,}0715$ (từng seed từ $0{,}056$ đến $0{,}084$), so với $0{,}0778$ của B-Free, nên với một ngưỡng khác S7 có thể không kém hơn; tuy nhiên kết luận này chưa được kiểm chứng vì ngưỡng phải chọn trên tập dev riêng, không phải trên tập kiểm tra.
+
+\paragraph{RQ2: module bổ trợ.} Trong các thí nghiệm hiện có không có bằng chứng ủng hộ LIB/GSR hay DCS. S6 (DCS) không vượt S3 theo tiêu chí đặt trước. Do S7 dùng công thức S3, kết quả cuối phải được hiểu là kết quả của công thức nền (LoRA, dữ liệu kiểu B-Free cộng AI-GenBench, 6 epoch), không phải của các module lấy cảm hứng từ GlobalForge. Điều này không mâu thuẫn trực tiếp với kết quả của GlobalForge~\cite{cui2026globalforge}: thiết lập của họ khác về backbone (ViT-L), dữ liệu huấn luyện (ảnh thật cùng ảnh tái tạo VAE), loss tương phản ($\lambda_{\text{dcs}}=0{,}01$ so với biến thể class-aware $\lambda=0{,}1$ của chúng tôi), và số epoch (2 so với thiết lập của họ). Cũng chưa thể tách phần đóng góp của việc huấn luyện lâu hơn (6 so với 2 epoch): S7 chưa được so paired với S3.
+
+\paragraph{Điểm vận hành và ứng dụng.} Hai điểm vận hành khác nhau phù hợp hai mục đích: S7 với TNR cao ít báo nhầm ảnh thật là giả (quan trọng khi gán nhãn sai gây hại), còn B-Free cân bằng hơn trên ảnh viral. Việc chọn ngưỡng nên dựa trên chi phí của từng loại lỗi và trên một tập dev riêng, không trên tập kiểm tra.
+
+\paragraph{Tính hợp lệ và phạm vi.} Mối đe dọa chính là (i) so sánh cấp hệ thống, (ii) việc lựa chọn công thức S7 có nhìn kết quả WildRF và B-Free viral, và (iii) chỉ ba seed. Thang thí nghiệm vẫn chưa đầy đủ: S4 và S5 đã được loại khỏi thang so sánh vì S4 không chạy và S5 lỗi nạp mô hình. Tham số tăng cường là giá trị tạm; LIB/GSR/DCS là cài đặt lại trên ViT-B/14 chứ không phải bản sao GlobalForge nguyên bản. Calibration, \texttt{Pd@10\%FAR} và \texttt{FPR@95\%TPR} chưa được xuất, B-Free viral chỉ có $785$ ảnh, WildRF-Facebook chỉ có $320$ ảnh; log một số lần chạy đầu không ghi commit, trong khi lần đánh giá cuối ghi commit \texttt{10c3ef3ae4} trên nhánh \texttt{integration/loss-backbone}. Chúng tôi giảm nhiễu đo lường bằng một chương trình đánh giá duy nhất, paired bootstrap và hiệu chỉnh đa so sánh, nhưng không thể loại bỏ các mối đe dọa này bằng thống kê.
+
+\section{Kết luận}\label{sec:conclusion}
+Chúng tôi trình bày một bộ phát hiện ảnh do AI sinh dựa trên DINOv2 ViT-B/14 và LoRA, huấn luyện theo công thức B-Free cộng AI-GenBench, cùng một giao thức đánh giá thống nhất để so sánh công bằng với B-Free. Trên ITW-SM và WildRF, hệ thống có AUC macro cao hơn B-Free khoảng $0{,}01$ với bằng chứng thống kê; trên B-Free viral images chưa đủ bằng chứng. Ở ngưỡng cố định, hệ thống thận trọng hơn khi gán nhãn giả. Các module lấy cảm hứng từ GlobalForge chưa chứng tỏ hiệu quả trong cài đặt này. Kết quả là của công thức nền và cần đọc cùng các nguồn bất định nêu trong Thảo luận.
+
+\appendix
+\renewcommand{\thesection}{\Alph{section}}
+\section{Chỉ số chi tiết theo mô hình}
+\begin{table}[H]\centering\scriptsize
+\caption{Chỉ số macro theo từng mô hình (ngưỡng $s=0$ cho Acc, TPR, TNR, bAcc).}
+\begin{tabular}{llccccccc}
+\toprule
+Benchmark & Mô hình & AUC & AP & Acc & TPR & TNR & bAcc & EER \\
+\midrule
+ITW-SM & B-Free official & 0,9410 & 0,9405 & 0,886 & 0,856 & 0,900 & 0,878 & 0,121 \\
+ITW-SM & S7 seed 42 & 0,9526 & 0,9555 & 0,893 & 0,775 & 0,982 & 0,878 & 0,098 \\
+ITW-SM & S7 seed 54 & 0,9516 & 0,9546 & 0,891 & 0,767 & 0,985 & 0,876 & 0,101 \\
+ITW-SM & S7 seed 68 & 0,9556 & 0,9581 & 0,895 & 0,773 & 0,986 & 0,880 & 0,092 \\
+\midrule
+WildRF & B-Free official & 0,9823 & 0,9855 & 0,932 & 0,961 & 0,902 & 0,932 & 0,053 \\
+WildRF & S7 seed 42 & 0,9915 & 0,9932 & 0,964 & 0,959 & 0,969 & 0,964 & 0,037 \\
+WildRF & S7 seed 54 & 0,9929 & 0,9938 & 0,965 & 0,950 & 0,980 & 0,965 & 0,035 \\
+WildRF & S7 seed 68 & 0,9942 & 0,9951 & 0,968 & 0,960 & 0,977 & 0,968 & 0,029 \\
+\midrule
+B-Free viral & B-Free official & 0,9700 & 0,9864 & 0,896 & 0,851 & 0,981 & 0,916 & 0,078 \\
+B-Free viral & S7 seed 42 & 0,9712 & 0,9871 & 0,786 & 0,674 & 1,000 & 0,837 & 0,084 \\
+B-Free viral & S7 seed 54 & 0,9706 & 0,9864 & 0,777 & 0,663 & 0,996 & 0,830 & 0,074 \\
+B-Free viral & S7 seed 68 & 0,9791 & 0,9908 & 0,809 & 0,709 & 1,000 & 0,855 & 0,056 \\
+\bottomrule
+\end{tabular}
+\end{table}
+\begin{table}[H]\centering\scriptsize
+\caption{Chỉ số pooled kèm CI 95\% của AUC (300 mẫu bootstrap).}
+\begin{tabular}{llcccccc}
+\toprule
+Benchmark & Mô hình & Thật / Giả & AUC [CI 95\%] & TPR & TNR & bAcc \\
+\midrule
+ITW-SM & B-Free official & 5\,000 / 5\,000 & 0,9547 $[0,9505,\,0,9587]$ & 0,889 & 0,900 & 0,895 \\
+ITW-SM & S7 seed 42 & 5\,000 / 5\,000 & 0,9636 $[0,9607,\,0,9670]$ & 0,821 & 0,982 & 0,902 \\
+ITW-SM & S7 seed 54 & 5\,000 / 5\,000 & 0,9630 $[0,9596,\,0,9668]$ & 0,816 & 0,985 & 0,901 \\
+ITW-SM & S7 seed 68 & 5\,000 / 5\,000 & 0,9660 $[0,9631,\,0,9696]$ & 0,823 & 0,986 & 0,904 \\
+\midrule
+WildRF & B-Free official & 1\,251 / 1\,252 & 0,9774 $[0,9717,\,0,9821]$ & 0,948 & 0,867 & 0,907 \\
+WildRF & S7 seed 42 & 1\,251 / 1\,252 & 0,9895 $[0,9854,\,0,9925]$ & 0,946 & 0,959 & 0,953 \\
+WildRF & S7 seed 54 & 1\,251 / 1\,252 & 0,9907 $[0,9870,\,0,9934]$ & 0,934 & 0,977 & 0,955 \\
+WildRF & S7 seed 68 & 1\,251 / 1\,252 & 0,9925 $[0,9888,\,0,9948]$ & 0,950 & 0,973 & 0,962 \\
+\midrule
+B-Free viral & B-Free official & 269 / 516 & 0,9700 $[0,9598,\,0,9787]$ & 0,851 & 0,981 & 0,916 \\
+B-Free viral & S7 seed 42 & 269 / 516 & 0,9712 $[0,9610,\,0,9812]$ & 0,674 & 1,000 & 0,837 \\
+B-Free viral & S7 seed 54 & 269 / 516 & 0,9706 $[0,9598,\,0,9809]$ & 0,663 & 0,996 & 0,830 \\
+B-Free viral & S7 seed 68 & 269 / 516 & 0,9791 $[0,9707,\,0,9877]$ & 0,709 & 1,000 & 0,855 \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\clearpage
+\section{Pipeline notebook Kaggle}
+\label{app:notebooks}
+
+\begin{table}[H]\centering\scriptsize
+\caption{Danh mục notebook Kaggle. Các notebook được liệt kê theo thứ tự sử dụng trong thí nghiệm.}
+\label{tab:notebooks}
+\begin{tabularx}{\linewidth}{p{3.4cm} X p{4.6cm}}
+\toprule
+Notebook & Chức năng & URL Kaggle \\
+\midrule
+xla-setup & Tạo bundle offline: wheel, trọng số DINOv2 reg4, mã nhánh \code{integration/loss-backbone} & \url{https://www.kaggle.com/code/baopv051/xla-setup} \\
+xla-training-s1 & Huấn luyện bậc S1 (không augment, không AI-GenBench) & \url{https://www.kaggle.com/code/baopv051/xla-training-s1} \\
+xla-training-s2 & Huấn luyện bậc S2 (thêm augment kiểu B-Free) & \url{https://www.kaggle.com/code/baopv051/xla-training-s2} \\
+xla-training-s3 & Huấn luyện bậc S3 (thêm AI-GenBench) & \url{https://www.kaggle.com/code/baopv051/xla-training-s3} \\
+xla-training-s6 & Huấn luyện S3 + DCS class-aware & \url{https://www.kaggle.com/code/baopv051/xla-training-s6} \\
+xla-training-s7-seed-42 & Huấn luyện S7 công thức S3, seed 42 & \url{https://www.kaggle.com/code/baopv051/xla-training-s7-seed-42} \\
+xla-training-s7-seed-54 & Huấn luyện S7 công thức S3, seed 54 & \url{https://www.kaggle.com/code/baopv051/xla-training-s7-seed-54} \\
+xla-training-s7-seed-68 & Huấn luyện S7 công thức S3, seed 68 & \url{https://www.kaggle.com/code/baopv051/xla-training-s7-seed-68} \\
+xla-eval-s3-6 & Đánh giá trung gian S3/S6 trên AI-GenBench, WildRF, B-Free viral & \url{https://www.kaggle.com/code/baopv051/xla-eval-s3-6} \\
+xla-eval-final-stage-1 & Chấm điểm S7 và B-Free trên ITW-SM, WildRF, B-Free viral & \url{https://www.kaggle.com/code/baopv051/xla-eval-final-stage-1} \\
+xla-eval-final-merged & Tổng hợp điểm, bootstrap và biểu đồ kết quả cuối & \url{https://www.kaggle.com/code/baopv051/xla-eval-final-merged} \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\clearpage
+\section{Bảng thuật ngữ}
+\begin{table}[H]\centering\small
+\begin{tabularx}{\linewidth}{l X}
+\toprule
+Thuật ngữ & Ý nghĩa \\
+\midrule
+Logit & Điểm thô của mô hình trước khi qua hàm sigmoid; $z>0$ nghĩa là dự đoán ảnh giả. \\
+Crop & Vùng cắt $504\times504$ từ ảnh; mỗi ảnh dùng 5 crop. \\
+Stem & Một ảnh thật gốc và các biến thể giả sinh từ nó. \\
+Paired & Huấn luyện theo cặp thật/giả cùng nội dung. \\
+LoRA & Thích ứng hạng thấp: chỉ học một cập nhật nhỏ thay vì cập nhật toàn bộ trọng số. \\
+Token CLS, patch, register & Token tổng hợp ảnh, token mỗi vùng ảnh, và token phụ giúp ổn định attention. \\
+LIB, GSR, DCS & Local Information Bottleneck, Global Structural Reasoning, Degradation-aware Contrastive Structural loss: ba thành phần của GlobalForge~\cite{cui2026globalforge} (Mục~\ref{sec:modules}). \\
+AUC, AP, EER & Chỉ số không phụ thuộc ngưỡng (Mục~\ref{sec:problem}). \\
+TPR, TNR, bAcc@0.5 & Chỉ số tại ngưỡng cố định $s=0$. \\
+Macro, pooled & Trung bình theo subset, hoặc tính trên toàn bộ ảnh gộp. \\
+Seed & Hạt giống ngẫu nhiên; ba seed cho ba lần huấn luyện độc lập. \\
+Epoch & Một lượt qua toàn bộ tập huấn luyện. \\
+OOD, in-the-wild & Ngoài phân phối huấn luyện; ảnh thu từ mạng xã hội. \\
+Bootstrap, CI & Lấy mẫu có hoàn lại để ước lượng khoảng tin cậy. \\
+n.s. & Không có ý nghĩa thống kê (CI chứa $0$). \\
+$q_{\text{BH}}$ & p-value sau hiệu chỉnh Benjamini--Hochberg. \\
+\bottomrule
+\end{tabularx}
+\end{table}
+
+\bibliographystyle{ieeetr}
+\bibliography{references}
+\end{document}

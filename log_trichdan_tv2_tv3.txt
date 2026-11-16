@@ -1,0 +1,17 @@
+=== TRÍCH ĐOẠN LOG TRAINING QUAN TRỌNG ===
+(Từ xla-training-phase-1.log — dùng cho TV2 và TV3)
+
+--- 1. Resample Position Embedding (37×37 → 36×36) ---
+04:01:05 | INFO | resample pos_embed: 37x37 -> 36x36 (checkpoint prefix tokens in pos_embed: 0)
+
+--- 2. Load Pretrained Backbone ---
+04:01:07 | INFO | pretrained load: dropped=0, missing=['head.weight', 'head.bias']
+
+--- 3. LoRA Configuration ---
+04:01:07 | INFO | trainable params: 4,751,811 / 91,277,763 (5.21%)
+[*] LoRA Configured (rank=16): 4,751,811 / 91,277,763 parameters trainable (5.21%)
+
+--- Giải thích ---
+- "dropped=0": Toàn bộ backbone DINOv2 được load thành công, không mất key nào.
+- "missing=['head.weight','head.bias']": Đây là classification head mới (2-class) — đúng thiết kế.
+- "5.21%": Chỉ 5.21% tham số cần gradient — backbone frozen, chỉ LoRA adapter + LIB/GSR/head được train.

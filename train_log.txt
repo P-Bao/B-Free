@@ -1,0 +1,393 @@
+2026-09-13 03:59:57 | INFO    | offline env vars set (HF hub blocked, bytecode off — repo source stays read-only in input)
+2026-09-13 04:00:52 | INFO    | pip --no-index OK | torch=2.8.0+cu128 timm=1.0.22 peft=0.15.2 transformers=4.55.4 hub=0.36.0 tokenizers=0.21.1
+2026-09-13 04:00:52 | INFO    | repo import OK from /kaggle/input/notebooks/baopv051/xla-setup/bfree_src/code/networks/bfree_globalforge_vit.py (no stubs — K0 verified)
+2026-09-13 04:00:52 | INFO    | REAL_DIR=/kaggle/input/datasets/baopv051/b-free-training-data/COCO_real_512/COCO_real_512 | 6 fake variants
+2026-09-13 04:00:52 | INFO    | CONFIG: {'arch': 'vit_base_patch14_reg4_dinov2.lvd142m', 'num_classes': 2, 'img_size': 504, 'lambda_dcs': 0.01, 'dcs_tau': 0.07, 'label_smoothing': 0.1, 'lib_kernel': 3, 'lib_tau': 0.5, 'gsr_window': 3, 'gsr_mask_prob': 1.0, 'epochs': 8, 'lora_rank': 16, 'lora_alpha': 32, 'lora_dropout': 0.05, 'lora_targets': ['qkv', 'proj', 'fc1', 'fc2'], 'lr': 0.0001, 'weight_decay': 0.0001, 'max_grad_norm': 1.0, 'scheduler_eta_min': 1e-07, 'max_vram_frac': 0.9, 'batch_hard_cap': 128, 'val_md5_percentile': 3, 'extra_source_val_percentile': 30, 'val_fake_variant': 'SD2.1_selfconditioned', 'pair_real_prob': 0.5, 'num_workers': 4, 'seed': 42}
+2026-09-13 04:00:53 | INFO    | stem index (scan) stem_index_real.json: [51517] files in 0.5s
+2026-09-13 04:00:56 | INFO    | stem index (scan) stem_index_fake.json: [51517, 51517, 51517, 51517, 51517, 51517] files in 2.9s
+2026-09-13 04:00:56 | INFO    | real=51517, fake variants=[51517, 51517, 51517, 51517, 51517, 51517]
+2026-09-13 04:00:56 | INFO    | train IDs=50083, val IDs=1434 (~3%)
+2026-09-13 04:00:56 | INFO    | lich fake: 4/8 epoch la fake/ID, toi da 66.7% moi bien the duoc dung it nhat 1 lan tren toan bo train IDs (so voi ~50.1% neu dung i.i.d. random.randrange nhu ban cu)
+2026-09-13 04:00:56 | INFO    | per-variant val datasets: SD2.1_inpainted_diffcat=2868, SD2.1_inpainted_diffcat_origBG=2868, SD2.1_inpainted_samecat=2868, SD2.1_inpainted_samecat_origBG=2868, SD2.1_selfconditioned=2868, SD2.1_selfconditioned_origBG=2868
+2026-09-13 04:00:56 | INFO    | train_ds=50083, val_ds=2868 | labels val[0],val[1]=0,1 (expect 0,1)
+2026-09-13 04:01:04 | INFO    | [extra] real_RAISE_1k: 1000 anh -> train 683 / held-out 317 (70/30%)
+2026-09-13 04:01:04 | INFO    | [extra] latent-diffusion: 1000 anh -> train 683 / held-out 317
+2026-09-13 04:01:04 | INFO    | [extra] sd3_flux/flux: 1003 anh -> train 686 / held-out 317
+2026-09-13 04:01:04 | INFO    | [extra] sd3_flux/sd3_large: 1000 anh -> train 683 / held-out 317
+2026-09-13 04:01:04 | INFO    | [extra] tong so anh THEM vao train: real=683, fake=2052 (tron chung voi train_ds qua ConcatDataset o cell sau)
+2026-09-13 04:01:05 | INFO    | resample pos_embed: 37x37 -> 36x36 (checkpoint prefix tokens in pos_embed: 0)
+2026-09-13 04:01:07 | INFO    | pretrained load: dropped=0, missing=['head.weight', 'head.bias']
+2026-09-13 04:01:07 | INFO    | trainable params: 4,751,811 / 91,277,763 (5.21%)
+2026-09-13 04:01:19 | DEBUG   | ep1 step 0/825 | total 0.7219 (ce 0.7219, dcs 0.0049) | lr 1.00e-04
+2026-09-13 04:01:41 | DEBUG   | ep1 step 20/825 | total 0.6792 (ce 0.6791, dcs 0.0075) | lr 1.00e-04
+2026-09-13 04:02:04 | DEBUG   | ep1 step 40/825 | total 0.6314 (ce 0.6313, dcs 0.0114) | lr 1.00e-04
+2026-09-13 04:02:27 | DEBUG   | ep1 step 60/825 | total 0.5878 (ce 0.5876, dcs 0.0179) | lr 1.00e-04
+2026-09-13 04:02:49 | DEBUG   | ep1 step 80/825 | total 0.5564 (ce 0.5561, dcs 0.0290) | lr 1.00e-04
+2026-09-13 04:03:12 | DEBUG   | ep1 step 100/825 | total 0.5306 (ce 0.5302, dcs 0.0465) | lr 9.99e-05
+2026-09-13 04:03:35 | DEBUG   | ep1 step 120/825 | total 0.5078 (ce 0.5070, dcs 0.0743) | lr 9.99e-05
+2026-09-13 04:03:58 | DEBUG   | ep1 step 140/825 | total 0.4875 (ce 0.4866, dcs 0.0948) | lr 9.99e-05
+2026-09-13 04:04:20 | DEBUG   | ep1 step 160/825 | total 0.4735 (ce 0.4725, dcs 0.1050) | lr 9.99e-05
+2026-09-13 04:04:43 | DEBUG   | ep1 step 180/825 | total 0.4587 (ce 0.4574, dcs 0.1354) | lr 9.98e-05
+2026-09-13 04:05:06 | DEBUG   | ep1 step 200/825 | total 0.4435 (ce 0.4420, dcs 0.1478) | lr 9.98e-05
+2026-09-13 04:05:29 | DEBUG   | ep1 step 220/825 | total 0.4326 (ce 0.4310, dcs 0.1561) | lr 9.97e-05
+2026-09-13 04:05:52 | DEBUG   | ep1 step 240/825 | total 0.4210 (ce 0.4193, dcs 0.1668) | lr 9.97e-05
+2026-09-13 04:06:14 | DEBUG   | ep1 step 260/825 | total 0.4110 (ce 0.4093, dcs 0.1692) | lr 9.96e-05
+2026-09-13 04:06:37 | DEBUG   | ep1 step 280/825 | total 0.4020 (ce 0.4003, dcs 0.1686) | lr 9.96e-05
+2026-09-13 04:07:00 | DEBUG   | ep1 step 300/825 | total 0.3936 (ce 0.3920, dcs 0.1672) | lr 9.95e-05
+2026-09-13 04:07:23 | DEBUG   | ep1 step 320/825 | total 0.3879 (ce 0.3863, dcs 0.1673) | lr 9.94e-05
+2026-09-13 04:07:45 | DEBUG   | ep1 step 340/825 | total 0.3822 (ce 0.3805, dcs 0.1678) | lr 9.93e-05
+2026-09-13 04:08:08 | DEBUG   | ep1 step 360/825 | total 0.3770 (ce 0.3753, dcs 0.1680) | lr 9.93e-05
+2026-09-13 04:08:31 | DEBUG   | ep1 step 380/825 | total 0.3712 (ce 0.3696, dcs 0.1677) | lr 9.92e-05
+2026-09-13 04:08:54 | DEBUG   | ep1 step 400/825 | total 0.3648 (ce 0.3632, dcs 0.1668) | lr 9.91e-05
+2026-09-13 04:09:16 | DEBUG   | ep1 step 420/825 | total 0.3594 (ce 0.3578, dcs 0.1676) | lr 9.90e-05
+2026-09-13 04:09:39 | DEBUG   | ep1 step 440/825 | total 0.3553 (ce 0.3536, dcs 0.1672) | lr 9.89e-05
+2026-09-13 04:10:02 | DEBUG   | ep1 step 460/825 | total 0.3503 (ce 0.3487, dcs 0.1656) | lr 9.88e-05
+2026-09-13 04:10:25 | DEBUG   | ep1 step 480/825 | total 0.3456 (ce 0.3439, dcs 0.1634) | lr 9.87e-05
+2026-09-13 04:10:47 | DEBUG   | ep1 step 500/825 | total 0.3413 (ce 0.3397, dcs 0.1610) | lr 9.86e-05
+2026-09-13 04:11:10 | DEBUG   | ep1 step 520/825 | total 0.3377 (ce 0.3361, dcs 0.1607) | lr 9.85e-05
+2026-09-13 04:11:33 | DEBUG   | ep1 step 540/825 | total 0.3342 (ce 0.3327, dcs 0.1582) | lr 9.84e-05
+2026-09-13 04:11:56 | DEBUG   | ep1 step 560/825 | total 0.3304 (ce 0.3289, dcs 0.1557) | lr 9.82e-05
+2026-09-13 04:12:18 | DEBUG   | ep1 step 580/825 | total 0.3269 (ce 0.3254, dcs 0.1544) | lr 9.81e-05
+2026-09-13 04:12:41 | DEBUG   | ep1 step 600/825 | total 0.3238 (ce 0.3223, dcs 0.1523) | lr 9.80e-05
+2026-09-13 04:13:04 | DEBUG   | ep1 step 620/825 | total 0.3209 (ce 0.3194, dcs 0.1499) | lr 9.78e-05
+2026-09-13 04:13:27 | DEBUG   | ep1 step 640/825 | total 0.3182 (ce 0.3167, dcs 0.1480) | lr 9.77e-05
+2026-09-13 04:13:49 | DEBUG   | ep1 step 660/825 | total 0.3155 (ce 0.3141, dcs 0.1466) | lr 9.75e-05
+2026-09-13 04:14:12 | DEBUG   | ep1 step 680/825 | total 0.3132 (ce 0.3118, dcs 0.1443) | lr 9.74e-05
+2026-09-13 04:14:35 | DEBUG   | ep1 step 700/825 | total 0.3108 (ce 0.3094, dcs 0.1431) | lr 9.72e-05
+2026-09-13 04:14:58 | DEBUG   | ep1 step 720/825 | total 0.3086 (ce 0.3072, dcs 0.1417) | lr 9.71e-05
+2026-09-13 04:15:20 | DEBUG   | ep1 step 740/825 | total 0.3062 (ce 0.3048, dcs 0.1406) | lr 9.69e-05
+2026-09-13 04:15:43 | DEBUG   | ep1 step 760/825 | total 0.3040 (ce 0.3026, dcs 0.1396) | lr 9.68e-05
+2026-09-13 04:16:06 | DEBUG   | ep1 step 780/825 | total 0.3022 (ce 0.3008, dcs 0.1384) | lr 9.66e-05
+2026-09-13 04:16:29 | DEBUG   | ep1 step 800/825 | total 0.3002 (ce 0.2989, dcs 0.1371) | lr 9.64e-05
+2026-09-13 04:16:52 | DEBUG   | ep1 step 820/825 | total 0.2985 (ce 0.2972, dcs 0.1364) | lr 9.62e-05
+2026-09-13 04:17:29 | DEBUG   | --> epoch 1: train total=0.2983 (ce=0.2969, dcs=0.1363) | val loss=0.2332 auc=0.9993 bacc=0.9878
+2026-09-13 04:19:58 | DEBUG   | per-variant val (epoch 1): SD2.1_inpainted_diffcat: auc=0.9999 bacc=0.9955 | SD2.1_inpainted_diffcat_origBG: auc=0.9998 bacc=0.9941 | SD2.1_inpainted_samecat: auc=0.9998 bacc=0.9955 | SD2.1_inpainted_samecat_origBG: auc=0.9976 bacc=0.9909 | SD2.1_selfconditioned: auc=0.9993 bacc=0.9878 | SD2.1_selfconditioned_origBG: auc=0.9873 bacc=0.9418
+2026-09-13 04:19:58 | INFO    | [*] best checkpoint saved (epoch 1, bAcc 0.9878)
+2026-09-13 04:19:58 | INFO    | --> epoch 1/8 xong | best bAcc so far = 0.9878
+2026-09-13 04:20:08 | DEBUG   | ep2 step 0/825 | total 0.2070 (ce 0.2059, dcs 0.1087) | lr 9.62e-05
+2026-09-13 04:20:31 | DEBUG   | ep2 step 20/825 | total 0.2212 (ce 0.2202, dcs 0.0997) | lr 9.60e-05
+2026-09-13 04:20:54 | DEBUG   | ep2 step 40/825 | total 0.2247 (ce 0.2237, dcs 0.0999) | lr 9.58e-05
+2026-09-13 04:21:17 | DEBUG   | ep2 step 60/825 | total 0.2237 (ce 0.2228, dcs 0.0917) | lr 9.56e-05
+2026-09-13 04:21:39 | DEBUG   | ep2 step 80/825 | total 0.2222 (ce 0.2212, dcs 0.0934) | lr 9.54e-05
+2026-09-13 04:22:02 | DEBUG   | ep2 step 100/825 | total 0.2229 (ce 0.2220, dcs 0.0891) | lr 9.52e-05
+2026-09-13 04:22:25 | DEBUG   | ep2 step 120/825 | total 0.2227 (ce 0.2219, dcs 0.0870) | lr 9.50e-05
+2026-09-13 04:22:48 | DEBUG   | ep2 step 140/825 | total 0.2238 (ce 0.2230, dcs 0.0829) | lr 9.48e-05
+2026-09-13 04:23:11 | DEBUG   | ep2 step 160/825 | total 0.2233 (ce 0.2225, dcs 0.0811) | lr 9.46e-05
+2026-09-13 04:23:33 | DEBUG   | ep2 step 180/825 | total 0.2234 (ce 0.2226, dcs 0.0791) | lr 9.44e-05
+2026-09-13 04:23:56 | DEBUG   | ep2 step 200/825 | total 0.2240 (ce 0.2233, dcs 0.0781) | lr 9.42e-05
+2026-09-13 04:24:19 | DEBUG   | ep2 step 220/825 | total 0.2242 (ce 0.2234, dcs 0.0786) | lr 9.39e-05
+2026-09-13 04:24:42 | DEBUG   | ep2 step 240/825 | total 0.2249 (ce 0.2241, dcs 0.0787) | lr 9.37e-05
+2026-09-13 04:25:04 | DEBUG   | ep2 step 260/825 | total 0.2243 (ce 0.2235, dcs 0.0772) | lr 9.35e-05
+2026-09-13 04:25:27 | DEBUG   | ep2 step 280/825 | total 0.2242 (ce 0.2234, dcs 0.0777) | lr 9.32e-05
+2026-09-13 04:25:50 | DEBUG   | ep2 step 300/825 | total 0.2247 (ce 0.2239, dcs 0.0785) | lr 9.30e-05
+2026-09-13 04:26:13 | DEBUG   | ep2 step 320/825 | total 0.2243 (ce 0.2235, dcs 0.0792) | lr 9.28e-05
+2026-09-13 04:26:35 | DEBUG   | ep2 step 340/825 | total 0.2241 (ce 0.2233, dcs 0.0781) | lr 9.25e-05
+2026-09-13 04:26:58 | DEBUG   | ep2 step 360/825 | total 0.2241 (ce 0.2233, dcs 0.0780) | lr 9.22e-05
+2026-09-13 04:27:21 | DEBUG   | ep2 step 380/825 | total 0.2240 (ce 0.2232, dcs 0.0778) | lr 9.20e-05
+2026-09-13 04:27:44 | DEBUG   | ep2 step 400/825 | total 0.2239 (ce 0.2232, dcs 0.0770) | lr 9.17e-05
+2026-09-13 04:28:06 | DEBUG   | ep2 step 420/825 | total 0.2233 (ce 0.2225, dcs 0.0766) | lr 9.15e-05
+2026-09-13 04:28:29 | DEBUG   | ep2 step 440/825 | total 0.2231 (ce 0.2224, dcs 0.0758) | lr 9.12e-05
+2026-09-13 04:28:52 | DEBUG   | ep2 step 460/825 | total 0.2232 (ce 0.2224, dcs 0.0748) | lr 9.09e-05
+2026-09-13 04:29:15 | DEBUG   | ep2 step 480/825 | total 0.2227 (ce 0.2219, dcs 0.0746) | lr 9.07e-05
+2026-09-13 04:29:37 | DEBUG   | ep2 step 500/825 | total 0.2222 (ce 0.2215, dcs 0.0731) | lr 9.04e-05
+2026-09-13 04:30:00 | DEBUG   | ep2 step 520/825 | total 0.2216 (ce 0.2209, dcs 0.0723) | lr 9.01e-05
+2026-09-13 04:30:23 | DEBUG   | ep2 step 540/825 | total 0.2211 (ce 0.2204, dcs 0.0721) | lr 8.98e-05
+2026-09-13 04:30:46 | DEBUG   | ep2 step 560/825 | total 0.2210 (ce 0.2203, dcs 0.0711) | lr 8.95e-05
+2026-09-13 04:31:09 | DEBUG   | ep2 step 580/825 | total 0.2208 (ce 0.2201, dcs 0.0703) | lr 8.92e-05
+2026-09-13 04:31:31 | DEBUG   | ep2 step 600/825 | total 0.2203 (ce 0.2196, dcs 0.0700) | lr 8.89e-05
+2026-09-13 04:31:54 | DEBUG   | ep2 step 620/825 | total 0.2199 (ce 0.2192, dcs 0.0698) | lr 8.86e-05
+2026-09-13 04:32:17 | DEBUG   | ep2 step 640/825 | total 0.2196 (ce 0.2189, dcs 0.0693) | lr 8.83e-05
+2026-09-13 04:32:40 | DEBUG   | ep2 step 660/825 | total 0.2193 (ce 0.2187, dcs 0.0687) | lr 8.80e-05
+2026-09-13 04:33:02 | DEBUG   | ep2 step 680/825 | total 0.2192 (ce 0.2185, dcs 0.0679) | lr 8.77e-05
+2026-09-13 04:33:25 | DEBUG   | ep2 step 700/825 | total 0.2192 (ce 0.2185, dcs 0.0672) | lr 8.74e-05
+2026-09-13 04:33:48 | DEBUG   | ep2 step 720/825 | total 0.2190 (ce 0.2183, dcs 0.0668) | lr 8.71e-05
+2026-09-13 04:34:11 | DEBUG   | ep2 step 740/825 | total 0.2189 (ce 0.2183, dcs 0.0666) | lr 8.68e-05
+2026-09-13 04:34:33 | DEBUG   | ep2 step 760/825 | total 0.2187 (ce 0.2180, dcs 0.0662) | lr 8.64e-05
+2026-09-13 04:34:56 | DEBUG   | ep2 step 780/825 | total 0.2185 (ce 0.2178, dcs 0.0657) | lr 8.61e-05
+2026-09-13 04:35:19 | DEBUG   | ep2 step 800/825 | total 0.2185 (ce 0.2178, dcs 0.0653) | lr 8.58e-05
+2026-09-13 04:35:42 | DEBUG   | ep2 step 820/825 | total 0.2184 (ce 0.2177, dcs 0.0649) | lr 8.54e-05
+2026-09-13 04:36:15 | DEBUG   | --> epoch 2: train total=0.2183 (ce=0.2177, dcs=0.0649) | val loss=0.2121 auc=1.0000 bacc=0.9979
+2026-09-13 04:38:40 | DEBUG   | per-variant val (epoch 2): SD2.1_inpainted_diffcat: auc=1.0000 bacc=0.9997 | SD2.1_inpainted_diffcat_origBG: auc=0.9999 bacc=0.9951 | SD2.1_inpainted_samecat: auc=1.0000 bacc=1.0000 | SD2.1_inpainted_samecat_origBG: auc=0.9997 bacc=0.9941 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9979 | SD2.1_selfconditioned_origBG: auc=0.9914 bacc=0.9575
+2026-09-13 04:40:21 | INFO    | [*] best checkpoint saved (epoch 2, bAcc 0.9979)
+2026-09-13 04:40:21 | INFO    | --> epoch 2/8 xong | best bAcc so far = 0.9979
+2026-09-13 04:40:30 | DEBUG   | ep3 step 0/825 | total 0.2234 (ce 0.2227, dcs 0.0729) | lr 8.54e-05
+2026-09-13 04:40:53 | DEBUG   | ep3 step 20/825 | total 0.2195 (ce 0.2189, dcs 0.0632) | lr 8.50e-05
+2026-09-13 04:41:16 | DEBUG   | ep3 step 40/825 | total 0.2150 (ce 0.2143, dcs 0.0636) | lr 8.47e-05
+2026-09-13 04:41:38 | DEBUG   | ep3 step 60/825 | total 0.2154 (ce 0.2148, dcs 0.0617) | lr 8.43e-05
+2026-09-13 04:42:01 | DEBUG   | ep3 step 80/825 | total 0.2135 (ce 0.2128, dcs 0.0602) | lr 8.40e-05
+2026-09-13 04:42:24 | DEBUG   | ep3 step 100/825 | total 0.2128 (ce 0.2123, dcs 0.0556) | lr 8.36e-05
+2026-09-13 04:42:47 | DEBUG   | ep3 step 120/825 | total 0.2126 (ce 0.2121, dcs 0.0533) | lr 8.33e-05
+2026-09-13 04:43:09 | DEBUG   | ep3 step 140/825 | total 0.2132 (ce 0.2127, dcs 0.0515) | lr 8.29e-05
+2026-09-13 04:43:32 | DEBUG   | ep3 step 160/825 | total 0.2133 (ce 0.2128, dcs 0.0503) | lr 8.26e-05
+2026-09-13 04:43:55 | DEBUG   | ep3 step 180/825 | total 0.2137 (ce 0.2132, dcs 0.0504) | lr 8.22e-05
+2026-09-13 04:44:18 | DEBUG   | ep3 step 200/825 | total 0.2133 (ce 0.2128, dcs 0.0511) | lr 8.18e-05
+2026-09-13 04:44:40 | DEBUG   | ep3 step 220/825 | total 0.2127 (ce 0.2122, dcs 0.0506) | lr 8.15e-05
+2026-09-13 04:45:03 | DEBUG   | ep3 step 240/825 | total 0.2125 (ce 0.2120, dcs 0.0506) | lr 8.11e-05
+2026-09-13 04:45:26 | DEBUG   | ep3 step 260/825 | total 0.2124 (ce 0.2119, dcs 0.0508) | lr 8.07e-05
+2026-09-13 04:45:49 | DEBUG   | ep3 step 280/825 | total 0.2122 (ce 0.2117, dcs 0.0509) | lr 8.03e-05
+2026-09-13 04:46:11 | DEBUG   | ep3 step 300/825 | total 0.2124 (ce 0.2119, dcs 0.0520) | lr 8.00e-05
+2026-09-13 04:46:34 | DEBUG   | ep3 step 320/825 | total 0.2128 (ce 0.2123, dcs 0.0515) | lr 7.96e-05
+2026-09-13 04:46:57 | DEBUG   | ep3 step 340/825 | total 0.2129 (ce 0.2124, dcs 0.0506) | lr 7.92e-05
+2026-09-13 04:47:20 | DEBUG   | ep3 step 360/825 | total 0.2134 (ce 0.2129, dcs 0.0500) | lr 7.88e-05
+2026-09-13 04:47:43 | DEBUG   | ep3 step 380/825 | total 0.2133 (ce 0.2128, dcs 0.0500) | lr 7.84e-05
+2026-09-13 04:48:05 | DEBUG   | ep3 step 400/825 | total 0.2130 (ce 0.2125, dcs 0.0495) | lr 7.80e-05
+2026-09-13 04:48:28 | DEBUG   | ep3 step 420/825 | total 0.2129 (ce 0.2124, dcs 0.0489) | lr 7.76e-05
+2026-09-13 04:48:51 | DEBUG   | ep3 step 440/825 | total 0.2125 (ce 0.2120, dcs 0.0490) | lr 7.72e-05
+2026-09-13 04:49:14 | DEBUG   | ep3 step 460/825 | total 0.2123 (ce 0.2118, dcs 0.0488) | lr 7.68e-05
+2026-09-13 04:49:36 | DEBUG   | ep3 step 480/825 | total 0.2122 (ce 0.2117, dcs 0.0486) | lr 7.64e-05
+2026-09-13 04:49:59 | DEBUG   | ep3 step 500/825 | total 0.2120 (ce 0.2115, dcs 0.0488) | lr 7.60e-05
+2026-09-13 04:50:22 | DEBUG   | ep3 step 520/825 | total 0.2120 (ce 0.2115, dcs 0.0486) | lr 7.56e-05
+2026-09-13 04:50:45 | DEBUG   | ep3 step 540/825 | total 0.2118 (ce 0.2113, dcs 0.0484) | lr 7.52e-05
+2026-09-13 04:51:07 | DEBUG   | ep3 step 560/825 | total 0.2122 (ce 0.2117, dcs 0.0479) | lr 7.48e-05
+2026-09-13 04:51:30 | DEBUG   | ep3 step 580/825 | total 0.2122 (ce 0.2117, dcs 0.0475) | lr 7.44e-05
+2026-09-13 04:51:53 | DEBUG   | ep3 step 600/825 | total 0.2120 (ce 0.2115, dcs 0.0472) | lr 7.40e-05
+2026-09-13 04:52:16 | DEBUG   | ep3 step 620/825 | total 0.2120 (ce 0.2115, dcs 0.0470) | lr 7.35e-05
+2026-09-13 04:52:38 | DEBUG   | ep3 step 640/825 | total 0.2120 (ce 0.2115, dcs 0.0470) | lr 7.31e-05
+2026-09-13 04:53:01 | DEBUG   | ep3 step 660/825 | total 0.2121 (ce 0.2117, dcs 0.0468) | lr 7.27e-05
+2026-09-13 04:53:24 | DEBUG   | ep3 step 680/825 | total 0.2122 (ce 0.2117, dcs 0.0468) | lr 7.23e-05
+2026-09-13 04:53:47 | DEBUG   | ep3 step 700/825 | total 0.2122 (ce 0.2117, dcs 0.0466) | lr 7.19e-05
+2026-09-13 04:54:09 | DEBUG   | ep3 step 720/825 | total 0.2120 (ce 0.2115, dcs 0.0467) | lr 7.14e-05
+2026-09-13 04:54:32 | DEBUG   | ep3 step 740/825 | total 0.2120 (ce 0.2115, dcs 0.0463) | lr 7.10e-05
+2026-09-13 04:54:55 | DEBUG   | ep3 step 760/825 | total 0.2118 (ce 0.2113, dcs 0.0462) | lr 7.06e-05
+2026-09-13 04:55:18 | DEBUG   | ep3 step 780/825 | total 0.2117 (ce 0.2113, dcs 0.0459) | lr 7.01e-05
+2026-09-13 04:55:41 | DEBUG   | ep3 step 800/825 | total 0.2118 (ce 0.2114, dcs 0.0455) | lr 6.97e-05
+2026-09-13 04:56:03 | DEBUG   | ep3 step 820/825 | total 0.2118 (ce 0.2114, dcs 0.0452) | lr 6.93e-05
+2026-09-13 04:56:38 | DEBUG   | --> epoch 3: train total=0.2118 (ce=0.2114, dcs=0.0451) | val loss=0.2115 auc=1.0000 bacc=0.9986
+2026-09-13 04:59:03 | DEBUG   | per-variant val (epoch 3): SD2.1_inpainted_diffcat: auc=1.0000 bacc=1.0000 | SD2.1_inpainted_diffcat_origBG: auc=1.0000 bacc=0.9990 | SD2.1_inpainted_samecat: auc=1.0000 bacc=1.0000 | SD2.1_inpainted_samecat_origBG: auc=0.9997 bacc=0.9986 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9986 | SD2.1_selfconditioned_origBG: auc=0.9977 bacc=0.9822
+2026-09-13 04:59:24 | INFO    | [*] best checkpoint saved (epoch 3, bAcc 0.9986)
+2026-09-13 04:59:24 | INFO    | --> epoch 3/8 xong | best bAcc so far = 0.9986
+2026-09-13 04:59:33 | DEBUG   | ep4 step 0/825 | total 0.1995 (ce 0.1993, dcs 0.0292) | lr 6.91e-05
+2026-09-13 04:59:56 | DEBUG   | ep4 step 20/825 | total 0.2097 (ce 0.2093, dcs 0.0425) | lr 6.87e-05
+2026-09-13 05:00:18 | DEBUG   | ep4 step 40/825 | total 0.2081 (ce 0.2077, dcs 0.0400) | lr 6.83e-05
+2026-09-13 05:00:41 | DEBUG   | ep4 step 60/825 | total 0.2064 (ce 0.2060, dcs 0.0392) | lr 6.78e-05
+2026-09-13 05:01:04 | DEBUG   | ep4 step 80/825 | total 0.2063 (ce 0.2059, dcs 0.0370) | lr 6.74e-05
+2026-09-13 05:01:27 | DEBUG   | ep4 step 100/825 | total 0.2080 (ce 0.2076, dcs 0.0357) | lr 6.69e-05
+2026-09-13 05:01:49 | DEBUG   | ep4 step 120/825 | total 0.2077 (ce 0.2074, dcs 0.0346) | lr 6.65e-05
+2026-09-13 05:02:12 | DEBUG   | ep4 step 140/825 | total 0.2072 (ce 0.2068, dcs 0.0339) | lr 6.60e-05
+2026-09-13 05:02:35 | DEBUG   | ep4 step 160/825 | total 0.2069 (ce 0.2066, dcs 0.0336) | lr 6.56e-05
+2026-09-13 05:02:58 | DEBUG   | ep4 step 180/825 | total 0.2076 (ce 0.2072, dcs 0.0348) | lr 6.51e-05
+2026-09-13 05:03:20 | DEBUG   | ep4 step 200/825 | total 0.2075 (ce 0.2071, dcs 0.0347) | lr 6.47e-05
+2026-09-13 05:03:43 | DEBUG   | ep4 step 220/825 | total 0.2076 (ce 0.2073, dcs 0.0345) | lr 6.42e-05
+2026-09-13 05:04:06 | DEBUG   | ep4 step 240/825 | total 0.2078 (ce 0.2075, dcs 0.0338) | lr 6.38e-05
+2026-09-13 05:04:29 | DEBUG   | ep4 step 260/825 | total 0.2081 (ce 0.2078, dcs 0.0336) | lr 6.33e-05
+2026-09-13 05:04:52 | DEBUG   | ep4 step 280/825 | total 0.2084 (ce 0.2081, dcs 0.0335) | lr 6.28e-05
+2026-09-13 05:05:14 | DEBUG   | ep4 step 300/825 | total 0.2081 (ce 0.2078, dcs 0.0334) | lr 6.24e-05
+2026-09-13 05:05:37 | DEBUG   | ep4 step 320/825 | total 0.2080 (ce 0.2077, dcs 0.0333) | lr 6.19e-05
+2026-09-13 05:06:00 | DEBUG   | ep4 step 340/825 | total 0.2079 (ce 0.2076, dcs 0.0333) | lr 6.15e-05
+2026-09-13 05:06:23 | DEBUG   | ep4 step 360/825 | total 0.2080 (ce 0.2076, dcs 0.0332) | lr 6.10e-05
+2026-09-13 05:06:45 | DEBUG   | ep4 step 380/825 | total 0.2077 (ce 0.2074, dcs 0.0334) | lr 6.05e-05
+2026-09-13 05:07:08 | DEBUG   | ep4 step 400/825 | total 0.2074 (ce 0.2071, dcs 0.0333) | lr 6.01e-05
+2026-09-13 05:07:31 | DEBUG   | ep4 step 420/825 | total 0.2073 (ce 0.2070, dcs 0.0331) | lr 5.96e-05
+2026-09-13 05:07:54 | DEBUG   | ep4 step 440/825 | total 0.2074 (ce 0.2071, dcs 0.0327) | lr 5.91e-05
+2026-09-13 05:08:16 | DEBUG   | ep4 step 460/825 | total 0.2074 (ce 0.2071, dcs 0.0326) | lr 5.87e-05
+2026-09-13 05:08:39 | DEBUG   | ep4 step 480/825 | total 0.2072 (ce 0.2069, dcs 0.0322) | lr 5.82e-05
+2026-09-13 05:09:02 | DEBUG   | ep4 step 500/825 | total 0.2072 (ce 0.2068, dcs 0.0319) | lr 5.77e-05
+2026-09-13 05:09:25 | DEBUG   | ep4 step 520/825 | total 0.2072 (ce 0.2069, dcs 0.0316) | lr 5.73e-05
+2026-09-13 05:09:47 | DEBUG   | ep4 step 540/825 | total 0.2073 (ce 0.2070, dcs 0.0313) | lr 5.68e-05
+2026-09-13 05:10:10 | DEBUG   | ep4 step 560/825 | total 0.2075 (ce 0.2072, dcs 0.0311) | lr 5.63e-05
+2026-09-13 05:10:33 | DEBUG   | ep4 step 580/825 | total 0.2078 (ce 0.2074, dcs 0.0310) | lr 5.58e-05
+2026-09-13 05:10:56 | DEBUG   | ep4 step 600/825 | total 0.2078 (ce 0.2075, dcs 0.0310) | lr 5.54e-05
+2026-09-13 05:11:18 | DEBUG   | ep4 step 620/825 | total 0.2078 (ce 0.2075, dcs 0.0309) | lr 5.49e-05
+2026-09-13 05:11:41 | DEBUG   | ep4 step 640/825 | total 0.2078 (ce 0.2074, dcs 0.0309) | lr 5.44e-05
+2026-09-13 05:12:04 | DEBUG   | ep4 step 660/825 | total 0.2077 (ce 0.2074, dcs 0.0306) | lr 5.39e-05
+2026-09-13 05:12:27 | DEBUG   | ep4 step 680/825 | total 0.2076 (ce 0.2073, dcs 0.0305) | lr 5.35e-05
+2026-09-13 05:12:49 | DEBUG   | ep4 step 700/825 | total 0.2074 (ce 0.2071, dcs 0.0302) | lr 5.30e-05
+2026-09-13 05:13:12 | DEBUG   | ep4 step 720/825 | total 0.2074 (ce 0.2071, dcs 0.0300) | lr 5.25e-05
+2026-09-13 05:13:35 | DEBUG   | ep4 step 740/825 | total 0.2073 (ce 0.2070, dcs 0.0299) | lr 5.20e-05
+2026-09-13 05:13:58 | DEBUG   | ep4 step 760/825 | total 0.2073 (ce 0.2070, dcs 0.0297) | lr 5.16e-05
+2026-09-13 05:14:21 | DEBUG   | ep4 step 780/825 | total 0.2073 (ce 0.2070, dcs 0.0297) | lr 5.11e-05
+2026-09-13 05:14:43 | DEBUG   | ep4 step 800/825 | total 0.2074 (ce 0.2071, dcs 0.0297) | lr 5.06e-05
+2026-09-13 05:15:06 | DEBUG   | ep4 step 820/825 | total 0.2073 (ce 0.2070, dcs 0.0297) | lr 5.01e-05
+2026-09-13 05:15:40 | DEBUG   | --> epoch 4: train total=0.2073 (ce=0.2070, dcs=0.0297) | val loss=0.2119 auc=1.0000 bacc=0.9979
+2026-09-13 05:18:05 | DEBUG   | per-variant val (epoch 4): SD2.1_inpainted_diffcat: auc=1.0000 bacc=0.9986 | SD2.1_inpainted_diffcat_origBG: auc=1.0000 bacc=0.9986 | SD2.1_inpainted_samecat: auc=1.0000 bacc=0.9986 | SD2.1_inpainted_samecat_origBG: auc=1.0000 bacc=0.9983 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9979 | SD2.1_selfconditioned_origBG: auc=0.9982 bacc=0.9927
+2026-09-13 05:18:05 | INFO    | --> epoch 4/8 xong | best bAcc so far = 0.9986
+2026-09-13 05:18:14 | DEBUG   | ep5 step 0/825 | total 0.2176 (ce 0.2175, dcs 0.0123) | lr 5.00e-05
+2026-09-13 05:18:37 | DEBUG   | ep5 step 20/825 | total 0.2051 (ce 0.2048, dcs 0.0324) | lr 4.96e-05
+2026-09-13 05:18:59 | DEBUG   | ep5 step 40/825 | total 0.2059 (ce 0.2056, dcs 0.0295) | lr 4.91e-05
+2026-09-13 05:19:22 | DEBUG   | ep5 step 60/825 | total 0.2050 (ce 0.2047, dcs 0.0280) | lr 4.86e-05
+2026-09-13 05:19:45 | DEBUG   | ep5 step 80/825 | total 0.2061 (ce 0.2058, dcs 0.0279) | lr 4.81e-05
+2026-09-13 05:20:08 | DEBUG   | ep5 step 100/825 | total 0.2071 (ce 0.2069, dcs 0.0272) | lr 4.76e-05
+2026-09-13 05:20:30 | DEBUG   | ep5 step 120/825 | total 0.2060 (ce 0.2057, dcs 0.0274) | lr 4.72e-05
+2026-09-13 05:20:53 | DEBUG   | ep5 step 140/825 | total 0.2061 (ce 0.2059, dcs 0.0274) | lr 4.67e-05
+2026-09-13 05:21:16 | DEBUG   | ep5 step 160/825 | total 0.2069 (ce 0.2067, dcs 0.0267) | lr 4.62e-05
+2026-09-13 05:21:39 | DEBUG   | ep5 step 180/825 | total 0.2066 (ce 0.2063, dcs 0.0272) | lr 4.58e-05
+2026-09-13 05:22:01 | DEBUG   | ep5 step 200/825 | total 0.2060 (ce 0.2057, dcs 0.0277) | lr 4.53e-05
+2026-09-13 05:22:24 | DEBUG   | ep5 step 220/825 | total 0.2061 (ce 0.2058, dcs 0.0280) | lr 4.48e-05
+2026-09-13 05:22:47 | DEBUG   | ep5 step 240/825 | total 0.2060 (ce 0.2057, dcs 0.0281) | lr 4.43e-05
+2026-09-13 05:23:10 | DEBUG   | ep5 step 260/825 | total 0.2056 (ce 0.2053, dcs 0.0282) | lr 4.39e-05
+2026-09-13 05:23:33 | DEBUG   | ep5 step 280/825 | total 0.2052 (ce 0.2049, dcs 0.0283) | lr 4.34e-05
+2026-09-13 05:23:55 | DEBUG   | ep5 step 300/825 | total 0.2051 (ce 0.2049, dcs 0.0285) | lr 4.29e-05
+2026-09-13 05:24:18 | DEBUG   | ep5 step 320/825 | total 0.2051 (ce 0.2048, dcs 0.0285) | lr 4.24e-05
+2026-09-13 05:24:41 | DEBUG   | ep5 step 340/825 | total 0.2048 (ce 0.2045, dcs 0.0289) | lr 4.20e-05
+2026-09-13 05:25:04 | DEBUG   | ep5 step 360/825 | total 0.2048 (ce 0.2045, dcs 0.0285) | lr 4.15e-05
+2026-09-13 05:25:26 | DEBUG   | ep5 step 380/825 | total 0.2051 (ce 0.2048, dcs 0.0283) | lr 4.10e-05
+2026-09-13 05:25:49 | DEBUG   | ep5 step 400/825 | total 0.2052 (ce 0.2049, dcs 0.0279) | lr 4.06e-05
+2026-09-13 05:26:12 | DEBUG   | ep5 step 420/825 | total 0.2049 (ce 0.2046, dcs 0.0278) | lr 4.01e-05
+2026-09-13 05:26:35 | DEBUG   | ep5 step 440/825 | total 0.2048 (ce 0.2045, dcs 0.0279) | lr 3.96e-05
+2026-09-13 05:26:57 | DEBUG   | ep5 step 460/825 | total 0.2046 (ce 0.2044, dcs 0.0278) | lr 3.92e-05
+2026-09-13 05:27:20 | DEBUG   | ep5 step 480/825 | total 0.2045 (ce 0.2042, dcs 0.0275) | lr 3.87e-05
+2026-09-13 05:27:43 | DEBUG   | ep5 step 500/825 | total 0.2044 (ce 0.2041, dcs 0.0275) | lr 3.83e-05
+2026-09-13 05:28:06 | DEBUG   | ep5 step 520/825 | total 0.2045 (ce 0.2042, dcs 0.0272) | lr 3.78e-05
+2026-09-13 05:28:28 | DEBUG   | ep5 step 540/825 | total 0.2046 (ce 0.2043, dcs 0.0270) | lr 3.73e-05
+2026-09-13 05:28:51 | DEBUG   | ep5 step 560/825 | total 0.2046 (ce 0.2043, dcs 0.0268) | lr 3.69e-05
+2026-09-13 05:29:14 | DEBUG   | ep5 step 580/825 | total 0.2045 (ce 0.2043, dcs 0.0266) | lr 3.64e-05
+2026-09-13 05:29:37 | DEBUG   | ep5 step 600/825 | total 0.2046 (ce 0.2043, dcs 0.0265) | lr 3.60e-05
+2026-09-13 05:29:59 | DEBUG   | ep5 step 620/825 | total 0.2046 (ce 0.2043, dcs 0.0263) | lr 3.55e-05
+2026-09-13 05:30:22 | DEBUG   | ep5 step 640/825 | total 0.2045 (ce 0.2042, dcs 0.0262) | lr 3.50e-05
+2026-09-13 05:30:45 | DEBUG   | ep5 step 660/825 | total 0.2045 (ce 0.2042, dcs 0.0261) | lr 3.46e-05
+2026-09-13 05:31:08 | DEBUG   | ep5 step 680/825 | total 0.2044 (ce 0.2041, dcs 0.0261) | lr 3.41e-05
+2026-09-13 05:31:31 | DEBUG   | ep5 step 700/825 | total 0.2044 (ce 0.2042, dcs 0.0260) | lr 3.37e-05
+2026-09-13 05:31:53 | DEBUG   | ep5 step 720/825 | total 0.2044 (ce 0.2042, dcs 0.0259) | lr 3.32e-05
+2026-09-13 05:32:16 | DEBUG   | ep5 step 740/825 | total 0.2043 (ce 0.2041, dcs 0.0258) | lr 3.28e-05
+2026-09-13 05:32:39 | DEBUG   | ep5 step 760/825 | total 0.2044 (ce 0.2041, dcs 0.0258) | lr 3.23e-05
+2026-09-13 05:33:02 | DEBUG   | ep5 step 780/825 | total 0.2042 (ce 0.2040, dcs 0.0257) | lr 3.19e-05
+2026-09-13 05:33:24 | DEBUG   | ep5 step 800/825 | total 0.2043 (ce 0.2040, dcs 0.0258) | lr 3.15e-05
+2026-09-13 05:33:47 | DEBUG   | ep5 step 820/825 | total 0.2044 (ce 0.2041, dcs 0.0259) | lr 3.10e-05
+2026-09-13 05:34:21 | DEBUG   | --> epoch 5: train total=0.2044 (ce=0.2041, dcs=0.0258) | val loss=0.2094 auc=1.0000 bacc=0.9997
+2026-09-13 05:36:46 | DEBUG   | per-variant val (epoch 5): SD2.1_inpainted_diffcat: auc=1.0000 bacc=1.0000 | SD2.1_inpainted_diffcat_origBG: auc=1.0000 bacc=0.9990 | SD2.1_inpainted_samecat: auc=1.0000 bacc=1.0000 | SD2.1_inpainted_samecat_origBG: auc=1.0000 bacc=0.9997 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9997 | SD2.1_selfconditioned_origBG: auc=0.9995 bacc=0.9927
+2026-09-13 05:36:46 | INFO    | [*] best checkpoint saved (epoch 5, bAcc 0.9997)
+2026-09-13 05:36:46 | INFO    | --> epoch 5/8 xong | best bAcc so far = 0.9997
+2026-09-13 05:36:55 | DEBUG   | ep6 step 0/825 | total 0.1997 (ce 0.1993, dcs 0.0381) | lr 3.09e-05
+2026-09-13 05:37:18 | DEBUG   | ep6 step 20/825 | total 0.2056 (ce 0.2053, dcs 0.0301) | lr 3.05e-05
+2026-09-13 05:37:41 | DEBUG   | ep6 step 40/825 | total 0.2032 (ce 0.2029, dcs 0.0286) | lr 3.00e-05
+2026-09-13 05:38:03 | DEBUG   | ep6 step 60/825 | total 0.2032 (ce 0.2030, dcs 0.0272) | lr 2.96e-05
+2026-09-13 05:38:26 | DEBUG   | ep6 step 80/825 | total 0.2038 (ce 0.2035, dcs 0.0267) | lr 2.92e-05
+2026-09-13 05:38:49 | DEBUG   | ep6 step 100/825 | total 0.2035 (ce 0.2032, dcs 0.0264) | lr 2.87e-05
+2026-09-13 05:39:12 | DEBUG   | ep6 step 120/825 | total 0.2028 (ce 0.2025, dcs 0.0263) | lr 2.83e-05
+2026-09-13 05:39:34 | DEBUG   | ep6 step 140/825 | total 0.2028 (ce 0.2026, dcs 0.0260) | lr 2.79e-05
+2026-09-13 05:39:57 | DEBUG   | ep6 step 160/825 | total 0.2033 (ce 0.2030, dcs 0.0258) | lr 2.75e-05
+2026-09-13 05:40:20 | DEBUG   | ep6 step 180/825 | total 0.2032 (ce 0.2030, dcs 0.0252) | lr 2.70e-05
+2026-09-13 05:40:43 | DEBUG   | ep6 step 200/825 | total 0.2029 (ce 0.2027, dcs 0.0251) | lr 2.66e-05
+2026-09-13 05:41:05 | DEBUG   | ep6 step 220/825 | total 0.2027 (ce 0.2024, dcs 0.0251) | lr 2.62e-05
+2026-09-13 05:41:28 | DEBUG   | ep6 step 240/825 | total 0.2029 (ce 0.2027, dcs 0.0249) | lr 2.58e-05
+2026-09-13 05:41:51 | DEBUG   | ep6 step 260/825 | total 0.2031 (ce 0.2029, dcs 0.0251) | lr 2.54e-05
+2026-09-13 05:42:14 | DEBUG   | ep6 step 280/825 | total 0.2031 (ce 0.2028, dcs 0.0247) | lr 2.50e-05
+2026-09-13 05:42:36 | DEBUG   | ep6 step 300/825 | total 0.2032 (ce 0.2029, dcs 0.0246) | lr 2.45e-05
+2026-09-13 05:42:59 | DEBUG   | ep6 step 320/825 | total 0.2033 (ce 0.2030, dcs 0.0243) | lr 2.41e-05
+2026-09-13 05:43:22 | DEBUG   | ep6 step 340/825 | total 0.2031 (ce 0.2029, dcs 0.0240) | lr 2.37e-05
+2026-09-13 05:43:45 | DEBUG   | ep6 step 360/825 | total 0.2031 (ce 0.2028, dcs 0.0240) | lr 2.33e-05
+2026-09-13 05:44:07 | DEBUG   | ep6 step 380/825 | total 0.2029 (ce 0.2026, dcs 0.0239) | lr 2.29e-05
+2026-09-13 05:44:30 | DEBUG   | ep6 step 400/825 | total 0.2027 (ce 0.2025, dcs 0.0236) | lr 2.25e-05
+2026-09-13 05:44:53 | DEBUG   | ep6 step 420/825 | total 0.2027 (ce 0.2025, dcs 0.0236) | lr 2.21e-05
+2026-09-13 05:45:16 | DEBUG   | ep6 step 440/825 | total 0.2026 (ce 0.2024, dcs 0.0236) | lr 2.17e-05
+2026-09-13 05:45:39 | DEBUG   | ep6 step 460/825 | total 0.2028 (ce 0.2026, dcs 0.0234) | lr 2.13e-05
+2026-09-13 05:46:01 | DEBUG   | ep6 step 480/825 | total 0.2029 (ce 0.2026, dcs 0.0233) | lr 2.10e-05
+2026-09-13 05:46:24 | DEBUG   | ep6 step 500/825 | total 0.2028 (ce 0.2025, dcs 0.0231) | lr 2.06e-05
+2026-09-13 05:46:47 | DEBUG   | ep6 step 520/825 | total 0.2028 (ce 0.2026, dcs 0.0229) | lr 2.02e-05
+2026-09-13 05:47:10 | DEBUG   | ep6 step 540/825 | total 0.2028 (ce 0.2026, dcs 0.0227) | lr 1.98e-05
+2026-09-13 05:47:32 | DEBUG   | ep6 step 560/825 | total 0.2028 (ce 0.2026, dcs 0.0225) | lr 1.94e-05
+2026-09-13 05:47:55 | DEBUG   | ep6 step 580/825 | total 0.2028 (ce 0.2026, dcs 0.0223) | lr 1.91e-05
+2026-09-13 05:48:18 | DEBUG   | ep6 step 600/825 | total 0.2027 (ce 0.2024, dcs 0.0221) | lr 1.87e-05
+2026-09-13 05:48:41 | DEBUG   | ep6 step 620/825 | total 0.2027 (ce 0.2024, dcs 0.0219) | lr 1.83e-05
+2026-09-13 05:49:03 | DEBUG   | ep6 step 640/825 | total 0.2026 (ce 0.2024, dcs 0.0218) | lr 1.80e-05
+2026-09-13 05:49:26 | DEBUG   | ep6 step 660/825 | total 0.2026 (ce 0.2024, dcs 0.0218) | lr 1.76e-05
+2026-09-13 05:49:49 | DEBUG   | ep6 step 680/825 | total 0.2026 (ce 0.2024, dcs 0.0217) | lr 1.72e-05
+2026-09-13 05:50:12 | DEBUG   | ep6 step 700/825 | total 0.2025 (ce 0.2023, dcs 0.0217) | lr 1.69e-05
+2026-09-13 05:50:34 | DEBUG   | ep6 step 720/825 | total 0.2025 (ce 0.2023, dcs 0.0217) | lr 1.65e-05
+2026-09-13 05:50:57 | DEBUG   | ep6 step 740/825 | total 0.2026 (ce 0.2024, dcs 0.0217) | lr 1.62e-05
+2026-09-13 05:51:20 | DEBUG   | ep6 step 760/825 | total 0.2025 (ce 0.2023, dcs 0.0217) | lr 1.58e-05
+2026-09-13 05:51:42 | DEBUG   | ep6 step 780/825 | total 0.2025 (ce 0.2023, dcs 0.0216) | lr 1.55e-05
+2026-09-13 05:52:05 | DEBUG   | ep6 step 800/825 | total 0.2025 (ce 0.2023, dcs 0.0216) | lr 1.51e-05
+2026-09-13 05:52:28 | DEBUG   | ep6 step 820/825 | total 0.2025 (ce 0.2023, dcs 0.0216) | lr 1.48e-05
+2026-09-13 05:53:02 | DEBUG   | --> epoch 6: train total=0.2025 (ce=0.2023, dcs=0.0216) | val loss=0.2083 auc=1.0000 bacc=0.9990
+2026-09-13 05:55:27 | DEBUG   | per-variant val (epoch 6): SD2.1_inpainted_diffcat: auc=1.0000 bacc=0.9990 | SD2.1_inpainted_diffcat_origBG: auc=1.0000 bacc=0.9986 | SD2.1_inpainted_samecat: auc=1.0000 bacc=0.9990 | SD2.1_inpainted_samecat_origBG: auc=1.0000 bacc=0.9986 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9990 | SD2.1_selfconditioned_origBG: auc=0.9998 bacc=0.9965
+2026-09-13 05:55:27 | INFO    | --> epoch 6/8 xong | best bAcc so far = 0.9997
+2026-09-13 05:55:36 | DEBUG   | ep7 step 0/825 | total 0.1993 (ce 0.1992, dcs 0.0146) | lr 1.47e-05
+2026-09-13 05:55:58 | DEBUG   | ep7 step 20/825 | total 0.2022 (ce 0.2020, dcs 0.0195) | lr 1.44e-05
+2026-09-13 05:56:21 | DEBUG   | ep7 step 40/825 | total 0.2023 (ce 0.2021, dcs 0.0198) | lr 1.40e-05
+2026-09-13 05:56:44 | DEBUG   | ep7 step 60/825 | total 0.2019 (ce 0.2017, dcs 0.0196) | lr 1.37e-05
+2026-09-13 05:57:07 | DEBUG   | ep7 step 80/825 | total 0.2013 (ce 0.2011, dcs 0.0194) | lr 1.34e-05
+2026-09-13 05:57:30 | DEBUG   | ep7 step 100/825 | total 0.2018 (ce 0.2016, dcs 0.0193) | lr 1.31e-05
+2026-09-13 05:57:52 | DEBUG   | ep7 step 120/825 | total 0.2014 (ce 0.2012, dcs 0.0191) | lr 1.28e-05
+2026-09-13 05:58:15 | DEBUG   | ep7 step 140/825 | total 0.2012 (ce 0.2010, dcs 0.0191) | lr 1.24e-05
+2026-09-13 05:58:38 | DEBUG   | ep7 step 160/825 | total 0.2016 (ce 0.2014, dcs 0.0191) | lr 1.21e-05
+2026-09-13 05:59:01 | DEBUG   | ep7 step 180/825 | total 0.2015 (ce 0.2013, dcs 0.0191) | lr 1.18e-05
+2026-09-13 05:59:23 | DEBUG   | ep7 step 200/825 | total 0.2014 (ce 0.2012, dcs 0.0193) | lr 1.15e-05
+2026-09-13 05:59:46 | DEBUG   | ep7 step 220/825 | total 0.2014 (ce 0.2013, dcs 0.0192) | lr 1.12e-05
+2026-09-13 06:00:09 | DEBUG   | ep7 step 240/825 | total 0.2013 (ce 0.2011, dcs 0.0191) | lr 1.09e-05
+2026-09-13 06:00:32 | DEBUG   | ep7 step 260/825 | total 0.2013 (ce 0.2011, dcs 0.0191) | lr 1.06e-05
+2026-09-13 06:00:54 | DEBUG   | ep7 step 280/825 | total 0.2012 (ce 0.2010, dcs 0.0190) | lr 1.03e-05
+2026-09-13 06:01:17 | DEBUG   | ep7 step 300/825 | total 0.2013 (ce 0.2011, dcs 0.0189) | lr 1.00e-05
+2026-09-13 06:01:40 | DEBUG   | ep7 step 320/825 | total 0.2012 (ce 0.2010, dcs 0.0192) | lr 9.77e-06
+2026-09-13 06:02:03 | DEBUG   | ep7 step 340/825 | total 0.2011 (ce 0.2009, dcs 0.0192) | lr 9.49e-06
+2026-09-13 06:02:25 | DEBUG   | ep7 step 360/825 | total 0.2011 (ce 0.2009, dcs 0.0193) | lr 9.21e-06
+2026-09-13 06:02:48 | DEBUG   | ep7 step 380/825 | total 0.2010 (ce 0.2009, dcs 0.0194) | lr 8.94e-06
+2026-09-13 06:03:11 | DEBUG   | ep7 step 400/825 | total 0.2010 (ce 0.2008, dcs 0.0193) | lr 8.67e-06
+2026-09-13 06:03:34 | DEBUG   | ep7 step 420/825 | total 0.2011 (ce 0.2009, dcs 0.0192) | lr 8.41e-06
+2026-09-13 06:03:56 | DEBUG   | ep7 step 440/825 | total 0.2010 (ce 0.2008, dcs 0.0191) | lr 8.15e-06
+2026-09-13 06:04:19 | DEBUG   | ep7 step 460/825 | total 0.2010 (ce 0.2009, dcs 0.0190) | lr 7.89e-06
+2026-09-13 06:04:42 | DEBUG   | ep7 step 480/825 | total 0.2012 (ce 0.2010, dcs 0.0189) | lr 7.64e-06
+2026-09-13 06:05:05 | DEBUG   | ep7 step 500/825 | total 0.2012 (ce 0.2010, dcs 0.0188) | lr 7.39e-06
+2026-09-13 06:05:27 | DEBUG   | ep7 step 520/825 | total 0.2013 (ce 0.2011, dcs 0.0188) | lr 7.14e-06
+2026-09-13 06:05:50 | DEBUG   | ep7 step 540/825 | total 0.2012 (ce 0.2010, dcs 0.0187) | lr 6.90e-06
+2026-09-13 06:06:13 | DEBUG   | ep7 step 560/825 | total 0.2013 (ce 0.2011, dcs 0.0186) | lr 6.66e-06
+2026-09-13 06:06:36 | DEBUG   | ep7 step 580/825 | total 0.2013 (ce 0.2012, dcs 0.0186) | lr 6.43e-06
+2026-09-13 06:06:58 | DEBUG   | ep7 step 600/825 | total 0.2013 (ce 0.2011, dcs 0.0185) | lr 6.20e-06
+2026-09-13 06:07:21 | DEBUG   | ep7 step 620/825 | total 0.2013 (ce 0.2011, dcs 0.0184) | lr 5.97e-06
+2026-09-13 06:07:44 | DEBUG   | ep7 step 640/825 | total 0.2012 (ce 0.2011, dcs 0.0184) | lr 5.75e-06
+2026-09-13 06:08:07 | DEBUG   | ep7 step 660/825 | total 0.2014 (ce 0.2012, dcs 0.0183) | lr 5.53e-06
+2026-09-13 06:08:29 | DEBUG   | ep7 step 680/825 | total 0.2015 (ce 0.2013, dcs 0.0182) | lr 5.32e-06
+2026-09-13 06:08:52 | DEBUG   | ep7 step 700/825 | total 0.2016 (ce 0.2014, dcs 0.0181) | lr 5.11e-06
+2026-09-13 06:09:15 | DEBUG   | ep7 step 720/825 | total 0.2016 (ce 0.2014, dcs 0.0181) | lr 4.90e-06
+2026-09-13 06:09:38 | DEBUG   | ep7 step 740/825 | total 0.2016 (ce 0.2014, dcs 0.0181) | lr 4.70e-06
+2026-09-13 06:10:00 | DEBUG   | ep7 step 760/825 | total 0.2016 (ce 0.2014, dcs 0.0180) | lr 4.51e-06
+2026-09-13 06:10:23 | DEBUG   | ep7 step 780/825 | total 0.2015 (ce 0.2013, dcs 0.0180) | lr 4.31e-06
+2026-09-13 06:10:46 | DEBUG   | ep7 step 800/825 | total 0.2015 (ce 0.2013, dcs 0.0180) | lr 4.12e-06
+2026-09-13 06:11:09 | DEBUG   | ep7 step 820/825 | total 0.2015 (ce 0.2013, dcs 0.0180) | lr 3.94e-06
+2026-09-13 06:11:42 | DEBUG   | --> epoch 7: train total=0.2014 (ce=0.2013, dcs=0.0180) | val loss=0.2086 auc=1.0000 bacc=0.9993
+2026-09-13 06:14:08 | DEBUG   | per-variant val (epoch 7): SD2.1_inpainted_diffcat: auc=1.0000 bacc=0.9993 | SD2.1_inpainted_diffcat_origBG: auc=1.0000 bacc=0.9993 | SD2.1_inpainted_samecat: auc=1.0000 bacc=0.9993 | SD2.1_inpainted_samecat_origBG: auc=1.0000 bacc=0.9990 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9993 | SD2.1_selfconditioned_origBG: auc=0.9999 bacc=0.9969
+2026-09-13 06:14:08 | INFO    | --> epoch 7/8 xong | best bAcc so far = 0.9997
+2026-09-13 06:14:17 | DEBUG   | ep8 step 0/825 | total 0.1992 (ce 0.1990, dcs 0.0165) | lr 3.89e-06
+2026-09-13 06:14:40 | DEBUG   | ep8 step 20/825 | total 0.2009 (ce 0.2008, dcs 0.0160) | lr 3.71e-06
+2026-09-13 06:15:02 | DEBUG   | ep8 step 40/825 | total 0.2028 (ce 0.2026, dcs 0.0177) | lr 3.54e-06
+2026-09-13 06:15:25 | DEBUG   | ep8 step 60/825 | total 0.2018 (ce 0.2017, dcs 0.0180) | lr 3.37e-06
+2026-09-13 06:15:48 | DEBUG   | ep8 step 80/825 | total 0.2014 (ce 0.2012, dcs 0.0177) | lr 3.20e-06
+2026-09-13 06:16:11 | DEBUG   | ep8 step 100/825 | total 0.2012 (ce 0.2010, dcs 0.0173) | lr 3.04e-06
+2026-09-13 06:16:33 | DEBUG   | ep8 step 120/825 | total 0.2013 (ce 0.2011, dcs 0.0168) | lr 2.88e-06
+2026-09-13 06:16:56 | DEBUG   | ep8 step 140/825 | total 0.2012 (ce 0.2010, dcs 0.0166) | lr 2.72e-06
+2026-09-13 06:17:19 | DEBUG   | ep8 step 160/825 | total 0.2015 (ce 0.2013, dcs 0.0161) | lr 2.57e-06
+2026-09-13 06:17:42 | DEBUG   | ep8 step 180/825 | total 0.2012 (ce 0.2010, dcs 0.0161) | lr 2.43e-06
+2026-09-13 06:18:04 | DEBUG   | ep8 step 200/825 | total 0.2011 (ce 0.2009, dcs 0.0160) | lr 2.29e-06
+2026-09-13 06:18:27 | DEBUG   | ep8 step 220/825 | total 0.2009 (ce 0.2007, dcs 0.0161) | lr 2.15e-06
+2026-09-13 06:18:50 | DEBUG   | ep8 step 240/825 | total 0.2010 (ce 0.2009, dcs 0.0160) | lr 2.02e-06
+2026-09-13 06:19:13 | DEBUG   | ep8 step 260/825 | total 0.2009 (ce 0.2007, dcs 0.0160) | lr 1.89e-06
+2026-09-13 06:19:35 | DEBUG   | ep8 step 280/825 | total 0.2008 (ce 0.2006, dcs 0.0162) | lr 1.77e-06
+2026-09-13 06:19:58 | DEBUG   | ep8 step 300/825 | total 0.2007 (ce 0.2005, dcs 0.0164) | lr 1.65e-06
+2026-09-13 06:20:21 | DEBUG   | ep8 step 320/825 | total 0.2008 (ce 0.2006, dcs 0.0165) | lr 1.53e-06
+2026-09-13 06:20:44 | DEBUG   | ep8 step 340/825 | total 0.2007 (ce 0.2005, dcs 0.0165) | lr 1.42e-06
+2026-09-13 06:21:06 | DEBUG   | ep8 step 360/825 | total 0.2007 (ce 0.2005, dcs 0.0165) | lr 1.31e-06
+2026-09-13 06:21:29 | DEBUG   | ep8 step 380/825 | total 0.2007 (ce 0.2005, dcs 0.0166) | lr 1.21e-06
+2026-09-13 06:21:52 | DEBUG   | ep8 step 400/825 | total 0.2007 (ce 0.2005, dcs 0.0168) | lr 1.11e-06
+2026-09-13 06:22:15 | DEBUG   | ep8 step 420/825 | total 0.2007 (ce 0.2005, dcs 0.0167) | lr 1.02e-06
+2026-09-13 06:22:38 | DEBUG   | ep8 step 440/825 | total 0.2007 (ce 0.2006, dcs 0.0169) | lr 9.32e-07
+2026-09-13 06:23:00 | DEBUG   | ep8 step 460/825 | total 0.2008 (ce 0.2006, dcs 0.0169) | lr 8.48e-07
+2026-09-13 06:23:23 | DEBUG   | ep8 step 480/825 | total 0.2008 (ce 0.2006, dcs 0.0169) | lr 7.68e-07
+2026-09-13 06:23:46 | DEBUG   | ep8 step 500/825 | total 0.2007 (ce 0.2006, dcs 0.0171) | lr 6.93e-07
+2026-09-13 06:24:09 | DEBUG   | ep8 step 520/825 | total 0.2007 (ce 0.2005, dcs 0.0171) | lr 6.22e-07
+2026-09-13 06:24:31 | DEBUG   | ep8 step 540/825 | total 0.2007 (ce 0.2005, dcs 0.0172) | lr 5.56e-07
+2026-09-13 06:24:54 | DEBUG   | ep8 step 560/825 | total 0.2007 (ce 0.2005, dcs 0.0172) | lr 4.94e-07
+2026-09-13 06:25:17 | DEBUG   | ep8 step 580/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 4.37e-07
+2026-09-13 06:25:40 | DEBUG   | ep8 step 600/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 3.84e-07
+2026-09-13 06:26:02 | DEBUG   | ep8 step 620/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 3.35e-07
+2026-09-13 06:26:25 | DEBUG   | ep8 step 640/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 2.91e-07
+2026-09-13 06:26:48 | DEBUG   | ep8 step 660/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 2.52e-07
+2026-09-13 06:27:11 | DEBUG   | ep8 step 680/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 2.17e-07
+2026-09-13 06:27:33 | DEBUG   | ep8 step 700/825 | total 0.2006 (ce 0.2004, dcs 0.0172) | lr 1.87e-07
+2026-09-13 06:27:56 | DEBUG   | ep8 step 720/825 | total 0.2006 (ce 0.2005, dcs 0.0172) | lr 1.61e-07
+2026-09-13 06:28:19 | DEBUG   | ep8 step 740/825 | total 0.2006 (ce 0.2005, dcs 0.0173) | lr 1.40e-07
+2026-09-13 06:28:42 | DEBUG   | ep8 step 760/825 | total 0.2006 (ce 0.2004, dcs 0.0173) | lr 1.23e-07
+2026-09-13 06:29:04 | DEBUG   | ep8 step 780/825 | total 0.2006 (ce 0.2005, dcs 0.0173) | lr 1.11e-07
+2026-09-13 06:29:27 | DEBUG   | ep8 step 800/825 | total 0.2007 (ce 0.2005, dcs 0.0174) | lr 1.03e-07
+2026-09-13 06:29:50 | DEBUG   | ep8 step 820/825 | total 0.2007 (ce 0.2005, dcs 0.0173) | lr 1.00e-07
+2026-09-13 06:30:24 | DEBUG   | --> epoch 8: train total=0.2007 (ce=0.2005, dcs=0.0173) | val loss=0.2076 auc=1.0000 bacc=0.9993
+2026-09-13 06:32:49 | DEBUG   | per-variant val (epoch 8): SD2.1_inpainted_diffcat: auc=1.0000 bacc=0.9993 | SD2.1_inpainted_diffcat_origBG: auc=1.0000 bacc=0.9993 | SD2.1_inpainted_samecat: auc=1.0000 bacc=0.9993 | SD2.1_inpainted_samecat_origBG: auc=1.0000 bacc=0.9990 | SD2.1_selfconditioned: auc=1.0000 bacc=0.9993 | SD2.1_selfconditioned_origBG: auc=0.9999 bacc=0.9965
+2026-09-13 06:32:49 | INFO    | --> epoch 8/8 xong | best bAcc so far = 0.9997
+2026-09-13 06:32:49 | INFO    | TRAINING COMPLETE
+2026-09-13 06:33:09 | INFO    | saved training_curves.png (+ per-variant panels)
+2026-09-13 06:33:09 | INFO    | [OOD] real_RAISE_1k held-out: 317 anh
+2026-09-13 06:33:09 | INFO    | [OOD] latent-diffusion held-out: 317 anh
+2026-09-13 06:33:09 | INFO    | [OOD] sd3_flux/flux held-out: 317 anh
+2026-09-13 06:33:09 | INFO    | [OOD] sd3_flux/sd3_large held-out: 317 anh
+2026-09-13 06:33:29 | INFO    | saved ood_extended_synthbuster.csv
+2026-09-13 06:34:29 | INFO    | [RealDeg] val file pool: 2868 anh (tu VAL_IDS)
+2026-09-13 06:38:30 | INFO    | saved realdeg_bench_style.csv/png | clean bAcc=0.9993, compound_step5 bAcc=0.5830
