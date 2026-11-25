@@ -428,7 +428,7 @@ $$\text{bucket}(\text{stem}) = \Big(\text{MD5}(\text{stem}) \bmod 100\Big) < 3$$
 
 ### **3.2. Chiến lược pha trộn đa dạng nguồn sinh có mỏ neo với AI-GenBench (25%)**
 
-Để kiểm chứng Giả thuyết H2 và giải quyết triệt để nút thắt chỉ học từ một bộ sinh SD 2.1, từ bậc S3 trở đi (S3, S4, S5, S6 và S7), nhóm thiết kế cơ chế pha trộn dữ liệu đa nguồn sinh có mỏ neo (other_frac = 0.25). Phần mỏ neo chống thiên lệch nội dung chiếm 75% trọng tâm, giữ nguyên toàn bộ 102.901 mẫu ghép cặp của B-Free [1] trong mỗi chu kỳ huấn luyện để duy trì kỷ luật buộc mô hình không được phân loại dựa trên chủ đề ngữ nghĩa [9].
+Để kiểm chứng Giả thuyết H2 và giải quyết triệt để nút thắt chỉ học từ một bộ sinh SD 2.1, từ bậc S3 trở đi (S3, S5, S6 và S7), nhóm thiết kế cơ chế pha trộn dữ liệu đa nguồn sinh có mỏ neo (other_frac = 0.25). Phần mỏ neo chống thiên lệch nội dung chiếm 75% trọng tâm, giữ nguyên toàn bộ 102.901 mẫu ghép cặp của B-Free [1] trong mỗi chu kỳ huấn luyện để duy trì kỷ luật buộc mô hình không được phân loại dựa trên chủ đề ngữ nghĩa [9].
 
 Phần mở rộng đa bộ sinh từ tập huấn luyện AI-GenBench chiếm 25% bổ sung, trích xuất cân bằng 46.800 ảnh thật và 46.800 ảnh giả (tổng cộng 93.600 mẫu, sau khi đã tách riêng 10% tương ứng 5.200 thật + 5.200 giả làm tập kiểm định held-out) trải đều trên các bộ sinh của bộ chuẩn AI-GenBench (Pellegrini và cộng sự, 2024 [6]) thuộc nhiều trường phái kiến trúc khác nhau (GAN [43, 45, 46, 47], Diffusion đa thế hệ [23, 42, 50], Flow Matching [51], mô hình tự hồi quy và sửa ảnh [52, 53]). Nhờ chiến lược pha trộn này, tổng quy mô tập huấn luyện mỗi chu kỳ tăng từ 102.901 mẫu lên 196.501 mẫu/chu kỳ, giúp mô hình học được phổ dấu vết tạo sinh phong phú ngay trong quá trình tối ưu hóa.
 
@@ -446,7 +446,7 @@ Ngay sau bước cắt khung không gian, để giúp mô hình làm quen với 
 
 ### **4.1. Thiết kế thang thực nghiệm cắt bỏ tuần tự (S1 đến S7) và tiêu chuẩn cổng kiểm định**
 
-Một sai lầm phổ biến trong nhiều nghiên cứu cải tiến mô hình là gộp tất cả các ý tưởng mới vào chạy một lần duy nhất, dẫn đến việc không thể biết thành phần nào thực sự mang lại hiệu quả và thành phần nào gây tác dụng ngược. Để khắc phục triệt để hạn chế này, bên cạnh nhánh thử nghiệm tích hợp toàn phần ban đầu (K2: chạy 8 chu kỳ với đầy đủ LoRA + LIB + GSR + Vanilla DCS $\lambda = 0,01$ trên dữ liệu gốc B-Free), nhóm thiết kế một Thang thực nghiệm cắt bỏ 7 bậc (S1 đến S7), trong đó mỗi bậc sau chỉ thay đổi đúng một biến số so với bậc trước (Bảng 3.2).
+Một sai lầm phổ biến trong nhiều nghiên cứu cải tiến mô hình là gộp tất cả các ý tưởng mới vào chạy một lần duy nhất, dẫn đến việc không thể biết thành phần nào thực sự mang lại hiệu quả và thành phần nào gây tác dụng ngược. Để khắc phục triệt để hạn chế này, bên cạnh nhánh thử nghiệm tích hợp toàn phần ban đầu (K2: chạy 8 chu kỳ với đầy đủ LoRA + LIB + GSR + Vanilla DCS $\lambda = 0,01$ trên dữ liệu gốc B-Free), nhóm thiết kế một Thang thực nghiệm cắt bỏ 6 bậc (S1, S2, S3, S5, S6 và S7), trong đó mỗi bậc sau chỉ thay đổi đúng một biến số so với bậc trước (Bảng 3.2).
 
 Bảng 3.2. Thiết kế chi tiết các bậc trong thang thực nghiệm cắt bỏ từ S1 đến S7.
 
@@ -455,7 +455,6 @@ Bảng 3.2. Thiết kế chi tiết các bậc trong thang thực nghiệm cắt
 | S1 | S1_clean_ce | 102.901 | Không (p = 0,0) | Không | Không | Không | 2 epochs (seed 42) | Đường cơ sở sạch: DINOv2 + LoRA trên dữ liệu ghép cặp B-Free. |
 | S2 | S2_online_aug | 102.901 | Có (p = 0,9) | Không | Không | Không | 2 epochs (seed 42) | Đo tác động của chuỗi mô phỏng suy giảm trực tuyến (tái tạo B-Free bằng LoRA). |
 | S3 | S3_add_aigenbench | 196.501 | Có (p = 0,9) | Có (25%) | Không | Không | 2 epochs (seed 42) | Kiểm chứng H2: Đánh giá hiệu quả của việc mở rộng đa nguồn sinh có mỏ neo. |
-| S4 | S4_dcs_vanilla | 196.501 | Có (p = 0,9) | Có (25%) | Không | Vanilla DCS ($\lambda = 0,1$) | 2 epochs (seed 42) | Kiểm chứng H3: Thử nghiệm hàm tương phản InfoNCE không phân biệt lớp. |
 | S5 | S5_lib_gsr_zero_init | 196.501 | Có (p = 0,9) | Có (25%) | Có ($w_{\text{gsr}} = 7$) | Không | 2 epochs (seed 42) | Kiểm chứng H3: Đánh giá đóng góp của LIB + GSR (cổng zero-init, cls_plus_patch). |
 | S6 | S6_dcs_class_aware | 196.501 | Có (p = 0,9) | Có (25%) | Không | Class-Aware ($\lambda = 0,1$) | 2 epochs (seed 42) | Kiểm chứng H3: Đánh giá hàm tương phản suy giảm có phân biệt lớp. |
 | S7 | S7_final_3seeds | 196.501 | Có (p = 0,9) | Có (25%) | Chọn từ Gate | Chọn từ Gate | 6 epochs (42, 54, 68) | Kiểm chứng H1 và H2: Huấn luyện hội tụ sâu cấu hình tối ưu trên 3 hạt giống độc lập. |

@@ -4,7 +4,7 @@
 >
 > Tài liệu được cấu trúc thành **hai giai đoạn rõ ràng** đúng theo trình tự nghiên cứu của dự án:
 > - **Giai đoạn I (Phần 1 – Phần 3):** Giới thiệu bài toán và **dựng lại trọn vẹn mô hình gốc B-Free** (từ triết lý căn chỉnh nội dung bằng Inpainting, chiến lược tăng cường dữ liệu, kiến trúc DINOv2 suy luận 5 góc cắt, cho đến kết quả thực nghiệm của mô hình chuẩn B-Free và các hạn chế còn tồn đọng).
-> - **Giai đoạn II (Phần 4 – Phần 7):** Trình bày **các đề xuất cải tiến của nhóm** (Tinh chỉnh hiệu quả tham số bằng LoRA, mở rộng đa dạng nguồn sinh với AI-GenBench 25% trên toàn bộ các bộ sinh, và thử nghiệm cấy ghép 3 module cấu trúc chống suy giảm LIB – GSR – DCS từ GlobalForge), đi theo **đúng trình tự thực nghiệm thời gian từ bậc S1 $\rightarrow$ S2 $\rightarrow$ S3 $\rightarrow$ S4/S5/S6 $\rightarrow$ S7 (3 hạt giống ngẫu nhiên)**, đối sánh thống kê với B-Free gốc và thảo luận các hướng mở để tiếp nhận ý kiến đóng góp.
+> - **Giai đoạn II (Phần 4 – Phần 7):** Trình bày **các đề xuất cải tiến của nhóm** (Tinh chỉnh hiệu quả tham số bằng LoRA, mở rộng đa dạng nguồn sinh với AI-GenBench 25% trên toàn bộ các bộ sinh, và thử nghiệm cấy ghép 3 module cấu trúc chống suy giảm LIB – GSR – DCS từ GlobalForge), đi theo **đúng trình tự thực nghiệm thời gian từ bậc S1 $\rightarrow$ S2 $\rightarrow$ S3 $\rightarrow$ S5/S6 $\rightarrow$ S7 (3 hạt giống ngẫu nhiên)**, đối sánh thống kê với B-Free gốc và thảo luận các hướng mở để tiếp nhận ý kiến đóng góp.
 
 ---
 
@@ -185,7 +185,7 @@ flowchart TD
     subgraph Model["2. Cải tiến Kiến trúc & Tinh chỉnh"]
         BB["DINOv2 ViT-B/14 + 4 Registers<br/>(Độ phân giải 504x504 -> 1.296 patch tokens)<br/>Đóng băng 86,5M tham số gốc"]
         LORA["Nhánh thích nghi hạng thấp LoRA<br/>(r = 16, alpha = 32 trên 49 tầng: qkv, proj, fc1, fc2, patch_embed)<br/>Chỉ huấn luyện 2,68% tham số (2,38M)"]
-        GF["Thử nghiệm 3 Module GlobalForge (S4 - S6):<br/>• Module 1: LIB (Lọc trơn Gaussian 3x3 cục bộ)<br/>• Module 2: GSR (Chú ý Chebyshev w_gsr = 7 + Zero-init Gate)<br/>• Module 3: Class-Aware DCS (Tương phản suy giảm phân biệt lớp)"]
+        GF["Thử nghiệm 3 Module GlobalForge (S5 - S6):<br/>• Module 1: LIB (Lọc trơn Gaussian 3x3 cục bộ)<br/>• Module 2: GSR (Chú ý Chebyshev w_gsr = 7 + Zero-init Gate)<br/>• Module 3: Class-Aware DCS (Tương phản suy giảm phân biệt lớp)"]
         BB --> LORA --> GF
     end
 
@@ -227,7 +227,7 @@ $$\mathbf{W} = \mathbf{W}_0 + \frac{\alpha}{r} \mathbf{B}\mathbf{A}, \quad \text
   - Phần mở rộng từ **AI-GenBench** đóng góp **$25\%$ tỷ trọng mẫu** trong quá trình huấn luyện, được lấy trải đều qua tất cả các họ mô hình (GAN cổ điển, Diffusion nhiều thế hệ, mô hình tự hồi quy và sửa ảnh).
   - Nhờ sự bổ sung này, quy mô tập huấn luyện mỗi epoch tăng từ $102.901$ ảnh (ở S1, S2) lên **$196.501$ ảnh** (ở S3), giúp mô hình tiếp xúc trực tiếp với phổ dấu vết tạo sinh đa dạng của nhiều họ kiến trúc khác nhau ngay trong lúc học.
 
-### 4.3. Cải tiến 3: Cấy ghép và cải biên 3 Module cấu trúc chống suy giảm từ GlobalForge (Bậc S4, S5, S6)
+### 4.3. Cải tiến 3: Cấy ghép và cải biên 3 Module cấu trúc chống suy giảm từ GlobalForge (Bậc S5, S6)
 
 Bên cạnh việc cải tiến dữ liệu và cơ chế tinh chỉnh LoRA, nhóm đặt giả thuyết rằng có thể tăng cường thêm khả năng chống chịu suy giảm bằng cách chuyển giao **cả 3 module cốt lõi** từ công trình **GlobalForge** (Wang và cộng sự, CVPR 2026) sang mạng xương sống **DINOv2 ViT-B/14**. Do GlobalForge gốc được thiết kế cho CLIP ViT-L/14 ở độ phân giải $224 \times 224$ (lưới $16 \times 16 = 256$ mảnh, chiều đặc trưng $1.024$), nhóm đã thực hiện **cải biên toán học cho cả 3 module** để tương thích với lưới mật độ cao $36 \times 36 = 1.296$ mảnh (chiều đặc trưng $D = 768$) của DINOv2 ở độ phân giải $504 \times 504$:
 
@@ -254,8 +254,8 @@ Bên cạnh việc cải tiến dữ liệu và cơ chế tinh chỉnh LoRA, nh�
 
 #### Module 3: Hàm mất mát Tương phản Cấu trúc Nhận thức Suy giảm Có Phân biệt Lớp (Class-Aware DCS)
 - **Ý tưởng trực quan:** Để đảm bảo vector biểu diễn của một bức ảnh không bị thay đổi khi bức ảnh đó chịu thêm một lần nén JPEG và làm mờ cực nặng, module DCS tạo ra hai góc nhìn từ mỗi ảnh trong lô huấn luyện (mini-batch): góc nhìn chuẩn $\mathbf{x}_i$ và góc nhìn bị làm suy giảm nặng hơn $\tilde{\mathbf{x}}_i$ (nén JPEG chất lượng thấp $Q \in [30, 70]$ kèm làm mờ Gaussian). Cả hai được chiếu qua một đầu MLP 2 tầng ($768 \rightarrow 768 \rightarrow 256$) và chuẩn hóa $\ell_2$ để thu được $\mathbf{z}_i$ và $\tilde{\mathbf{z}}_i$.
-- **Phát hiện xung đột của DCS nguyên bản (Bậc S4) và Đề xuất Class-Aware DCS (Bậc S6):**
-  - Trong **DCS nguyên bản (Vanilla InfoNCE — Bậc S4)**, hàm mất mát kéo $\mathbf{z}_i$ lại gần $\tilde{\mathbf{z}}_i$ (cặp dương) và đẩy $\mathbf{z}_i$ ra xa **tất cả các mẫu khác** $j \neq i$ trong cùng batch:
+- **Phát hiện xung đột của DCS nguyên bản và Đề xuất Class-Aware DCS (Bậc S6):**
+  - Trong **DCS nguyên bản (Vanilla InfoNCE của GlobalForge)**, hàm mất mát kéo $\mathbf{z}_i$ lại gần $\tilde{\mathbf{z}}_i$ (cặp dương) và đẩy $\mathbf{z}_i$ ra xa **tất cả các mẫu khác** $j \neq i$ trong cùng batch:
     $$\mathcal{L}_{\text{DCS-vanilla}} = -\frac{1}{B}\sum_{i=1}^{B} \log \frac{\exp(\mathbf{z}_i^\top \tilde{\mathbf{z}}_i / \tau)}{\exp(\mathbf{z}_i^\top \tilde{\mathbf{z}}_i / \tau) + \sum_{j \neq i} \exp(\mathbf{z}_i^\top \mathbf{z}_j / \tau)}$$
   - **Vấn đề:** Trong một batch phân loại nhị phân (Thật / Giả), một nửa số mẫu $j \neq i$ có **cùng nhãn lớp** với mẫu $i$ ($y_j = y_i$). Việc ép hai bức ảnh thật (hoặc hai bức ảnh giả) phải đẩy nhau ra xa trên mặt cầu đơn vị sẽ phá vỡ cấu trúc cụm của từng lớp, đối kháng trực tiếp với hàm mất mát phân loại Cross-Entropy.
   - **Giải pháp Class-Aware DCS của nhóm (Bậc S6):** Nhóm sửa lại mẫu số của hàm InfoNCE sao cho **chỉ các mẫu thuộc lớp đối diện ($y_j \neq y_i$) mới đóng vai trò là mẫu âm (negatives)**:
@@ -268,7 +268,7 @@ Bên cạnh việc cải tiến dữ liệu và cơ chế tinh chỉnh LoRA, nh�
 
 ### 5.1. Thiết kế Thang thực nghiệm cắt bỏ (Ablation Ladder)
 
-Để đánh giá công bằng đóng góp của từng ý tưởng cải tiến và tránh việc gộp chung nhiều module một cách mù quáng, nhóm thiết kế một **Thang thực nghiệm 7 bậc (S1 $\rightarrow$ S7)** tuân thủ nguyên tắc: *mỗi bậc sau chỉ thay đổi đúng một yếu tố so với bậc liền trước*. Ở giai đoạn sàng lọc (S1 $\rightarrow$ S6), tất cả các bậc đều chạy trong cùng điều kiện chuẩn: **2 epoch, hạt giống ngẫu nhiên `seed = 42`, tối ưu hóa AdamW** (tốc độ học $10^{-4}$ giảm dần theo lịch Cosine về $10^{-6}$, `weight_decay` $= 10^{-2}$, kích thước lô hiệu dụng $64$, độ chính xác hỗn hợp `bf16` trên GPU NVIDIA).
+Để đánh giá công bằng đóng góp của từng ý tưởng cải tiến và tránh việc gộp chung nhiều module một cách mù quáng, nhóm thiết kế một **Thang thực nghiệm 6 bậc (S1, S2, S3, S5, S6 $\rightarrow$ S7)** tuân thủ nguyên tắc: *mỗi bậc sau chỉ thay đổi đúng một yếu tố so với bậc liền trước*. Ở giai đoạn sàng lọc (S1 $\rightarrow$ S6), tất cả các bậc đều chạy trong cùng điều kiện chuẩn: **2 epoch, hạt giống ngẫu nhiên `seed = 42`, tối ưu hóa AdamW** (tốc độ học $10^{-4}$ giảm dần theo lịch Cosine về $10^{-6}$, `weight_decay` $= 10^{-2}$, kích thước lô hiệu dụng $64$, độ chính xác hỗn hợp `bf16` trên GPU NVIDIA).
 
 **Bảng 2: Cấu hình chi tiết của Thang thực nghiệm từ S1 đến S7**
 
@@ -277,7 +277,6 @@ Bên cạnh việc cải tiến dữ liệu và cơ chế tinh chỉnh LoRA, nh�
 | **S1** (`S1_clean_ce`) | Tái tạo B-Free cơ sở (chỉ dữ liệu ghép cặp + LoRA) | $102.901$ | Không ($p=0,0$) | Không | Không | Không | 2 epochs (`seed 42`) |
 | **S2** (`S2_online_aug`) | Tái tạo đầy đủ quy trình B-Free (+ tăng cường trực tuyến) | $102.901$ | **Có ($p=0,9$)** | Không | Không | Không | 2 epochs (`seed 42`) |
 | **S3** (`S3_add_aigenbench`) | **Cải tiến dữ liệu:** + AI-GenBench 25% trên toàn bộ 36 bộ sinh | **$196.501$** | **Có ($p=0,9$)** | **Có (25% vanilla, all 36 gens)** | Không | Không | 2 epochs (`seed 42`) |
-| **S4** (`S4_dcs_vanilla`) | Thử nghiệm thêm module DCS nguyên bản (Vanilla InfoNCE) | $196.501$ | Có ($p=0,9$) | Có (25% vanilla) | Không | Vanilla DCS ($\lambda=0,1$) | 2 epochs (`seed 42`) |
 | **S5** (`S5_lib_gsr_zero_init`) | **Cải tiến kiến trúc:** + Module 1 (LIB) & Module 2 (GSR Zero-init + `cls_plus_patch`) | $196.501$ | Có ($p=0,9$) | Có (25% vanilla) | **Có (LIB + GSR)** | Không | 2 epochs (`seed 42`) |
 | **S6** (`S6_dcs_class_aware`) | **Cải tiến hàm mất mát:** + Module 3 (Class-Aware DCS phân biệt lớp) | $196.501$ | Có ($p=0,9$) | Có (25% vanilla) | Không | **Class-Aware DCS ($\lambda=0,1$)** | 2 epochs (`seed 42`) |
 | **S7** (`S7_final_3seeds`) | **Mô hình cuối cùng của nhóm:** Công thức tốt nhất (S3) huấn luyện hội tụ sâu đa hạt giống | **$196.501$** | **Có ($p=0,9$)** | **Có (25% vanilla, all 36 gens)** | Không | Không | **6 epochs (`seed 42, 54, 68`)** |
@@ -493,7 +492,7 @@ Ngoài việc đối sánh trực tiếp với mô hình gốc `B-Free (official
 
 Để người đọc và hội đồng phản biện có cái nhìn toàn diện nhất nhằm góp ý cho dự án, nhóm xin phân tích thẳng thắn các bài học rút ra cùng những hạn chế kỹ thuật còn tồn tại:
 
-### 7.1. Tại sao công thức "Tinh gọn + Đa dạng dữ liệu" (S3/S7) lại chiến thắng các module kiến trúc phức tạp (S4/S5/S6)?
+### 7.1. Tại sao công thức "Tinh gọn + Đa dạng dữ liệu" (S3/S7) lại chiến thắng các module kiến trúc phức tạp (S5/S6)?
 
 1. **DINOv2 ViT-B/14 với 4 Register Tokens vốn đã sở hữu năng lực cấu trúc toàn cục rất mạnh:**
    Module LIB và GSR trong bài báo GlobalForge ban đầu được thiết kế để "chữa bệnh" cho **CLIP ViT-L/14** — một mạng xương sống học qua đối sánh văn bản nên thường bỏ qua kết cấu tinh vi và dễ bị nhiễu cục bộ đánh lừa. Ngược lại, trong dự án của chúng ta, mạng xương sống là **DINOv2 ViT-B/14 có 4 Register Tokens** hoạt động ở độ phân giải cao $504 \times 504$. Cơ chế tự giám sát cấp độ mảnh (patch-level self-distillation) cùng 4 token thanh ghi của DINOv2 đã tự động tổng hợp ngữ cảnh toàn cục và khử nhiễu rất hiệu quả. Việc gượng ép chèn thêm bộ lọc làm mờ cố định (LIB) và mặt nạ chặn lân cận (GSR) lên trên đặc trưng đã chín muồi của DINOv2 không những gây dư thừa mà còn làm suy giảm các chi tiết vi cấu trúc.

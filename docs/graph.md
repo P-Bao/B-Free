@@ -21,7 +21,7 @@
 | **Epoch** | Một lượt mô hình học qua **toàn bộ** tập dữ liệu huấn luyện (ví dụ $102.901$ ảnh ở S1–S2 hoặc $196.501$ ảnh ở S3–S7). | S1–S6 chạy $2$ epoch để sàng lọc nhanh; S7 chạy $6$ epoch để học sâu. |
 | **Train Loss / Val Loss** | **Độ sai lệch** khi đoán trên tập học (Train) và tập kiểm tra nội bộ (Val). Công thức đo xem xác suất mô hình đoán lệch bao xa so với nhãn đúng (`0` = Thật, `1` = Giả). | **Càng nhỏ càng tốt**, và `Val Loss` phải giảm đều cùng `Train Loss` (nếu `Train Loss` giảm mà `Val Loss` tăng vọt là bị học vẹt / Overfitting). |
 | **Train CE Loss** | Thành phần mất mát phân loại nhị phân chuẩn (Cross-Entropy). | Càng nhỏ càng tốt. |
-| **Train DCS Loss** | Thành phần mất mát tương phản (chỉ có ở bậc S4/S6) ép ảnh sạch và ảnh nén JPEG nặng có đặc trưng giống nhau. | Giảm dần theo epoch (ở S6 giảm từ $0,0611 \rightarrow 0,0390$). |
+| **Train DCS Loss** | Thành phần mất mát tương phản (chỉ có ở bậc S6) ép ảnh sạch và ảnh nén JPEG nặng có đặc trưng giống nhau. | Giảm dần theo epoch (ở S6 giảm từ $0,0611 \rightarrow 0,0390$). |
 
 ---
 
